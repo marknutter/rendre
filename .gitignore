@@ -1,0 +1,16 @@
+node_modules/
+out/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+
+# electron-vite
+.vite/
+
+# editor
+.vscode/
+.idea/
+
+# OS-level rendre state (created at runtime in userData)
