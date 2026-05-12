@@ -41,6 +41,9 @@ export function App() {
 
   const webviewRef = useRef<(HTMLElement & { src: string }) | null>(null)
   const lastBlobUrlRef = useRef<string | null>(null)
+  const webviewReadyRef = useRef(false)
+  const toolStatusRef = useRef<string | null>(null)
+  const [toolStatus, setToolStatus] = useState<string | null>(null)
 
   // Carries the in-flight generation's metadata for the event handlers to use
   const generationRef = useRef<{
@@ -93,20 +96,42 @@ export function App() {
   useEffect(() => {
     const wv = webviewRef.current
     if (!wv) return
+    webviewReadyRef.current = false
+    const onReady = () => {
+      webviewReadyRef.current = true
+      applyToolStatus()
+    }
+    wv.addEventListener('dom-ready', onReady)
     if (!canvasSrc) {
       wv.src = 'about:blank'
-      return
-    }
-    if (canvasSrc.kind === 'stream') {
+    } else if (canvasSrc.kind === 'stream') {
       wv.src = canvasSrc.url
-      return
+    } else {
+      const blob = new Blob([canvasSrc.html], { type: 'text/html' })
+      const url = URL.createObjectURL(blob)
+      wv.src = url
+      if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current)
+      lastBlobUrlRef.current = url
     }
-    const blob = new Blob([canvasSrc.html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    wv.src = url
-    if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current)
-    lastBlobUrlRef.current = url
+    return () => wv.removeEventListener('dom-ready', onReady)
   }, [canvasSrc])
+
+  useEffect(() => {
+    toolStatusRef.current = toolStatus
+    if (canvasSrc?.kind === 'skeleton') applyToolStatus()
+  }, [toolStatus, canvasSrc?.kind])
+
+  function applyToolStatus() {
+    const wv = webviewRef.current as unknown as {
+      executeJavaScript?: (code: string) => Promise<unknown>
+    } | null
+    if (!wv || !webviewReadyRef.current) return
+    const text = toolStatusRef.current
+    if (!text) return
+    void wv.executeJavaScript?.(
+      `window.__rendreSetStatus && window.__rendreSetStatus(${JSON.stringify(text)})`
+    )
+  }
 
   // Subscribe to streaming events
   useEffect(() => {
@@ -156,6 +181,7 @@ export function App() {
       })
       setGenerating(false)
       setGenId(null)
+      setToolStatus(null)
       generationRef.current = null
     })
 
@@ -169,13 +195,28 @@ export function App() {
       })
       setGenerating(false)
       setGenId(null)
+      setToolStatus(null)
       generationRef.current = null
+    })
+
+    const offTool = window.rendre.onTool((id, event) => {
+      if (!generationRef.current || generationRef.current.id !== id) return
+      const url = (event.input as { url?: string } | undefined)?.url
+      const label = url ?? event.tool
+      if (event.type === 'start') {
+        setToolStatus(`Fetching ${label}…`)
+      } else if (event.type === 'done') {
+        setToolStatus(`Read ${label}. Composing webpage…`)
+      } else if (event.type === 'error') {
+        setToolStatus(`Tool error: ${event.error ?? label}`)
+      }
     })
 
     return () => {
       offUrl()
       offDone()
       offError()
+      offTool()
     }
   }, [config.provider, config.model])
 
@@ -199,6 +240,7 @@ export function App() {
     const userPrompt = prompt
     setPrompt('')
     setGenerating(true)
+    setToolStatus(null)
     setCanvasSrc({ kind: 'skeleton', html: skeletonHtml(userPrompt, config.provider) })
 
     try {

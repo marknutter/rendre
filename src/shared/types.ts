@@ -44,6 +44,13 @@ export interface GenerateResponse {
   usage?: UsageStats
 }
 
+export interface ToolUseEvent {
+  type: 'start' | 'done' | 'error'
+  tool: string
+  input?: unknown
+  error?: string
+}
+
 export const ANTHROPIC_MODELS = [
   'claude-opus-4-7',
   'claude-sonnet-4-6',

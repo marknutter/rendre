@@ -4,7 +4,8 @@ import type {
   GenerateRequest,
   GenerateResponse,
   ProviderConfig,
-  ProviderId
+  ProviderId,
+  ToolUseEvent
 } from '../shared/types'
 
 const api = {
@@ -38,6 +39,11 @@ const api = {
     const handler = (_e: unknown, id: string, msg: string) => cb(id, msg)
     ipcRenderer.on('llm:error', handler)
     return () => ipcRenderer.off('llm:error', handler)
+  },
+  onTool: (cb: (id: string, event: ToolUseEvent) => void): (() => void) => {
+    const handler = (_e: unknown, id: string, event: ToolUseEvent) => cb(id, event)
+    ipcRenderer.on('llm:tool', handler)
+    return () => ipcRenderer.off('llm:tool', handler)
   }
 }
 
