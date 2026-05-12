@@ -1,5 +1,5 @@
 import { Readability } from '@mozilla/readability'
-import { JSDOM } from 'jsdom'
+import { parseHTML } from 'linkedom'
 
 const MAX_CONTENT_CHARS = 40_000
 const MAX_BODY_BYTES = 4_000_000
@@ -111,8 +111,9 @@ export async function fetchUrl(
 
     if (contentType.startsWith('text/html')) {
       try {
-        const dom = new JSDOM(raw, { url: res.url })
-        const reader = new Readability(dom.window.document)
+        const { document } = parseHTML(raw)
+        // Readability's TS types want a jsdom Document; linkedom's is structurally compatible.
+        const reader = new Readability(document as unknown as Document)
         const article = reader.parse()
         if (article && article.textContent) {
           const text = article.textContent.replace(/\n{3,}/g, '\n\n').trim()
