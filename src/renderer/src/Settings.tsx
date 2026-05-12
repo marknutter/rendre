@@ -33,7 +33,7 @@ export function Settings({ config, onClose, onSaved }: Props) {
       if (apiKey.trim()) {
         await window.rendre.setKey(provider, apiKey.trim())
       }
-      const next: ProviderConfig = { provider, model }
+      const next: ProviderConfig = { ...config, provider, model }
       await window.rendre.setConfig(next)
       onSaved(next)
     } finally {

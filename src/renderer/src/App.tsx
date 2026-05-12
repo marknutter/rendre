@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Conversation,
   ProviderConfig,
+  Theme,
   Turn,
   UsageStats
 } from '../../shared/types'
@@ -47,6 +48,20 @@ export function App() {
     conv: Conversation
     prompt: string
   } | null>(null)
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => {
+      const resolved =
+        config.theme === 'system' ? (mq.matches ? 'dark' : 'light') : config.theme
+      document.documentElement.dataset.theme = resolved
+    }
+    apply()
+    if (config.theme === 'system') {
+      mq.addEventListener('change', apply)
+      return () => mq.removeEventListener('change', apply)
+    }
+  }, [config.theme])
 
   useEffect(() => {
     void (async () => {
@@ -215,6 +230,14 @@ export function App() {
     else setCanvasSrc(null)
   }
 
+  function cycleTheme() {
+    const order: Theme[] = ['system', 'light', 'dark']
+    const next = order[(order.indexOf(config.theme) + 1) % order.length]
+    const updated = { ...config, theme: next }
+    setConfig(updated)
+    void window.rendre.setConfig(updated)
+  }
+
   function newChat() {
     const conv = freshConversation()
     void persistConversations([conv, ...conversations])
@@ -232,6 +255,13 @@ export function App() {
         <div className="sidebar-header">
           <span className="brand">rendre</span>
           <div className="sidebar-actions">
+            <button
+              className="icon-btn"
+              onClick={cycleTheme}
+              title={`Theme: ${config.theme} (click to cycle)`}
+            >
+              {config.theme === 'system' ? '◐' : config.theme === 'light' ? '○' : '●'}
+            </button>
             <button className="icon-btn" onClick={newChat} title="New chat">+</button>
             <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Settings">⚙</button>
           </div>

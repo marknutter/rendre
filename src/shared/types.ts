@@ -1,4 +1,5 @@
 export type ProviderId = 'anthropic' | 'openai'
+export type Theme = 'system' | 'light' | 'dark'
 
 export interface Turn {
   id: string
@@ -21,6 +22,7 @@ export interface Conversation {
 export interface ProviderConfig {
   provider: ProviderId
   model: string
+  theme: Theme
 }
 
 export interface GenerateRequest {
@@ -52,5 +54,6 @@ export const OPENAI_MODELS = ['gpt-5', 'gpt-5-mini', 'gpt-4o'] as const
 
 export const DEFAULT_CONFIG: ProviderConfig = {
   provider: 'anthropic',
-  model: 'claude-sonnet-4-6'
+  model: 'claude-sonnet-4-6',
+  theme: 'system'
 }

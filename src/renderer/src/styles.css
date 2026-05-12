@@ -6,6 +6,34 @@
   --text: #e7e7ea;
   --text-dim: #8a8a92;
   --accent: #7c5cff;
+  --input-bg: #1d1d23;
+  --hover-overlay: rgba(255, 255, 255, 0.04);
+  --active-overlay: rgba(124, 92, 255, 0.15);
+  --icon-hover-border: #3a3a44;
+  --error-bg: #4a1a1a;
+  --error-border: #6a2424;
+  --error-text: #ffcaca;
+  --cancel-bg: #6e2929;
+  --cancel-bg-hover: #823434;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f5f5f7;
+  --border: #d8d8dd;
+  --text: #1a1a1f;
+  --text-dim: #6b6b75;
+  --accent: #5a3eff;
+  --input-bg: #ffffff;
+  --hover-overlay: rgba(0, 0, 0, 0.04);
+  --active-overlay: rgba(90, 62, 255, 0.12);
+  --icon-hover-border: #b8b8bf;
+  --error-bg: #fdecec;
+  --error-border: #f3b8b8;
+  --error-text: #7a1a1a;
+  --cancel-bg: #c54a4a;
+  --cancel-bg-hover: #b03c3c;
 }
 
 * { box-sizing: border-box; }
@@ -62,7 +90,7 @@ html, body, #root {
   cursor: pointer;
   font-size: 12px;
 }
-.icon-btn:hover { color: var(--text); border-color: #3a3a44; }
+.icon-btn:hover { color: var(--text); border-color: var(--icon-hover-border); }
 
 .turn-list {
   flex: 1;
@@ -86,8 +114,8 @@ html, body, #root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.turn-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
-.turn-item.active { background: rgba(124,92,255,0.15); color: var(--text); }
+.turn-item:hover { background: var(--hover-overlay); color: var(--text); }
+.turn-item.active { background: var(--active-overlay); color: var(--text); }
 
 .main {
   display: flex;
@@ -128,7 +156,7 @@ html, body, #root {
 
 .input {
   flex: 1;
-  background: #1d1d23;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
@@ -151,8 +179,8 @@ html, body, #root {
   font-weight: 500;
 }
 .send:disabled { opacity: 0.5; cursor: not-allowed; }
-.send.cancel { background: #6e2929; }
-.send.cancel:hover { background: #823434; }
+.send.cancel { background: var(--cancel-bg); }
+.send.cancel:hover { background: var(--cancel-bg-hover); }
 
 .modal-backdrop {
   position: fixed; inset: 0;
@@ -172,7 +200,7 @@ html, body, #root {
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .field label { font-size: 12px; color: var(--text-dim); }
 .field input, .field select {
-  background: #1d1d23;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 10px;
@@ -182,9 +210,9 @@ html, body, #root {
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
 .error-banner {
-  background: #4a1a1a;
-  border: 1px solid #6a2424;
-  color: #ffcaca;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
   padding: 8px 12px;
   margin: 8px 12px 0;
   border-radius: 6px;
