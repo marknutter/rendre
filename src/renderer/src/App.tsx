@@ -190,6 +190,7 @@ export function App() {
   // Subscribe to streaming events
   useEffect(() => {
     const offUrls = window.rendre.onStreamUrls((id, mainUrl, previewUrl) => {
+      console.log('[rendre] onStreamUrls', { id, mainUrl, previewUrl })
       if (!generationRef.current || generationRef.current.id !== id) return
       if (previewUrl) {
         setCanvasSrc({ kind: 'wrapper', mainUrl, previewUrl })

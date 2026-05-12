@@ -97,23 +97,29 @@ app.whenReady().then(async () => {
     const provider = getProvider(req.provider)
     const sender = e.sender
     const hasPreview = typeof provider.generatePreview === 'function'
+    console.log(
+      `[rendre] llm:start id=${id} provider=${req.provider} model=${req.model} hasPreview=${hasPreview}`
+    )
 
     let urlsFired = false
-    const fireUrlsOnce = () => {
-      if (urlsFired) return
+    const fireUrlsOnce = (which: 'main' | 'preview') => {
+      if (urlsFired) {
+        console.log(`[rendre] slot ${which} ready (already fired)`)
+        return
+      }
       urlsFired = true
+      const mainUrl = getStreamUrl(id)
+      const previewUrl = hasPreview ? getStreamUrl(previewId) : null
+      console.log(
+        `[rendre] llm:urls sent (first ready=${which}) main=${mainUrl} preview=${previewUrl ?? 'none'}`
+      )
       if (!sender.isDestroyed()) {
-        sender.send(
-          'llm:urls',
-          id,
-          getStreamUrl(id),
-          hasPreview ? getStreamUrl(previewId) : null
-        )
+        sender.send('llm:urls', id, mainUrl, previewUrl)
       }
     }
 
-    createSlot(id, fireUrlsOnce)
-    if (hasPreview) createSlot(previewId, fireUrlsOnce)
+    createSlot(id, () => fireUrlsOnce('main'))
+    if (hasPreview) createSlot(previewId, () => fireUrlsOnce('preview'))
 
     ;(async () => {
       const mainPromise = provider.generate(req, apiKey, {
@@ -151,6 +157,9 @@ app.whenReady().then(async () => {
         const [result, preview] = await Promise.all([mainPromise, previewPromise])
         finishSlot(id)
         const mergedUsage = mergeUsage(result.usage, preview.usage)
+        console.log(
+          `[rendre] llm:done id=${id} main=${result.html.length} chars preview=${preview.html.length} chars urlsFired=${urlsFired}`
+        )
         if (!sender.isDestroyed()) {
           sender.send('llm:done', id, {
             html: result.html,
@@ -160,6 +169,7 @@ app.whenReady().then(async () => {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[rendre] llm:error id=${id} ${msg}`)
         failSlot(id)
         if (hasPreview) failSlot(previewId)
         if (!sender.isDestroyed()) sender.send('llm:error', id, msg)
