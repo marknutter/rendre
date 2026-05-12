@@ -86,12 +86,17 @@ export function pushChunk(id: string, accumulated: string): void {
 
   slot.rawBuffer = accumulated
 
-  // Detect HTML start once
+  // Detect HTML start once — but wait until paintable body content is buffered.
+  // Models typically emit a large <head><style>…</style></head> before any body
+  // text, and browsers won't paint anything until <body> content arrives. If we
+  // navigate to the stream URL on first `<!doctype>`, the webview goes blank for
+  // 20-30s while the head streams. Hold the skeleton until body content is here.
   if (slot.htmlOffset === null) {
     const stripped = accumulated.replace(/^\s*```(?:html)?\s*\n?/i, '')
-    const m = stripped.match(/<!doctype|<html|<body/i)
-    if (m && m.index !== undefined) {
-      const offset = accumulated.length - stripped.length + m.index
+    const startMatch = stripped.match(/<!doctype|<html|<body/i)
+    const hasBodyContent = /<body[^>]*>[\s\S]{120,}/i.test(stripped)
+    if (startMatch && startMatch.index !== undefined && hasBodyContent) {
+      const offset = accumulated.length - stripped.length + startMatch.index
       slot.htmlOffset = offset
       slot.lastSent = 0
       slot.onReady?.()
