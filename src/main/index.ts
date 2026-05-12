@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
 import { join } from 'path'
 import { getProvider } from './providers'
 import {
@@ -61,8 +61,14 @@ function createWindow(): BrowserWindow {
 app.whenReady().then(async () => {
   await startStreamServer()
 
+  const bootCfg = await loadConfig()
+  nativeTheme.themeSource = bootCfg.theme
+
   ipcMain.handle('config:get', () => loadConfig())
-  ipcMain.handle('config:set', (_e, c: ProviderConfig) => saveConfig(c))
+  ipcMain.handle('config:set', async (_e, c: ProviderConfig) => {
+    await saveConfig(c)
+    nativeTheme.themeSource = c.theme
+  })
 
   ipcMain.handle('history:get', () => loadConversations())
   ipcMain.handle('history:set', (_e, c: Conversation[]) => saveConversations(c))
