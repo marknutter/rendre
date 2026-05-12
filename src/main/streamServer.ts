@@ -17,6 +17,12 @@ let port = 0
 export function startStreamServer(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      const composedMatch = req.url?.match(/^\/composed\/([^/?]+)/)
+      if (composedMatch) {
+        const id = composedMatch[1]
+        serveComposed(id, res)
+        return
+      }
       const match = req.url?.match(/^\/gen\/([^/?]+)/)
       if (!match) {
         res.statusCode = 404
@@ -62,6 +68,78 @@ export function startStreamServer(): Promise<number> {
       resolve(port)
     })
   })
+}
+
+function serveComposed(id: string, res: ServerResponse): void {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  const mainUrl = `/gen/${id}`
+  const previewUrl = `/gen/${id}:preview`
+  res.end(composedWrapperHtml(mainUrl, previewUrl))
+}
+
+function composedWrapperHtml(mainPath: string, previewPath: string): string {
+  return `<!doctype html>
+<html>
+<head>
+<meta name="color-scheme" content="light dark">
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; padding: 0; min-height: 100%; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+</style>
+</head>
+<body>
+<div id="rendre-preview"></div>
+<div id="rendre-main"></div>
+<script>
+(function() {
+  function strip(buf) {
+    return buf
+      .replace(/<!doctype[^>]*>/gi, '')
+      .replace(/<\\/?html[^>]*>/gi, '')
+      .replace(/<\\/?head[^>]*>/gi, '')
+      .replace(/<\\/?body[^>]*>/gi, '');
+  }
+  async function streamInto(path, targetId) {
+    if (!path) return;
+    var target = document.getElementById(targetId);
+    if (!target) return;
+    try {
+      var res = await fetch(path);
+      if (!res.ok || !res.body) return;
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+      var emitted = 0;
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        var stripped = strip(buf);
+        if (stripped.length > emitted) {
+          target.insertAdjacentHTML('beforeend', stripped.slice(emitted));
+          emitted = stripped.length;
+        }
+      }
+      buf += decoder.decode();
+      var finalStripped = strip(buf);
+      if (finalStripped.length > emitted) {
+        target.insertAdjacentHTML('beforeend', finalStripped.slice(emitted));
+      }
+    } catch (e) {}
+  }
+  streamInto(${JSON.stringify(previewPath)}, 'rendre-preview');
+  streamInto(${JSON.stringify(mainPath)}, 'rendre-main');
+})();
+</script>
+</body>
+</html>`
+}
+
+export function getComposedUrl(id: string): string {
+  return `http://127.0.0.1:${port}/composed/${id}`
 }
 
 export function createSlot(id: string, onReady: () => void): void {

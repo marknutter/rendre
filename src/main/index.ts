@@ -12,6 +12,7 @@ import {
   startStreamServer,
   createSlot,
   getStreamUrl,
+  getComposedUrl,
   pushChunk,
   finishSlot,
   failSlot
@@ -101,25 +102,20 @@ app.whenReady().then(async () => {
       `[rendre] llm:start id=${id} provider=${req.provider} model=${req.model} hasPreview=${hasPreview}`
     )
 
-    let urlsFired = false
-    const fireUrlsOnce = (which: 'main' | 'preview') => {
-      if (urlsFired) {
+    let urlFired = false
+    const fireUrlOnce = (which: 'main' | 'preview') => {
+      if (urlFired) {
         console.log(`[rendre] slot ${which} ready (already fired)`)
         return
       }
-      urlsFired = true
-      const mainUrl = getStreamUrl(id)
-      const previewUrl = hasPreview ? getStreamUrl(previewId) : null
-      console.log(
-        `[rendre] llm:urls sent (first ready=${which}) main=${mainUrl} preview=${previewUrl ?? 'none'}`
-      )
-      if (!sender.isDestroyed()) {
-        sender.send('llm:urls', id, mainUrl, previewUrl)
-      }
+      urlFired = true
+      const url = hasPreview ? getComposedUrl(id) : getStreamUrl(id)
+      console.log(`[rendre] llm:url sent (first ready=${which}) url=${url}`)
+      if (!sender.isDestroyed()) sender.send('llm:url', id, url)
     }
 
-    createSlot(id, () => fireUrlsOnce('main'))
-    if (hasPreview) createSlot(previewId, () => fireUrlsOnce('preview'))
+    createSlot(id, () => fireUrlOnce('main'))
+    if (hasPreview) createSlot(previewId, () => fireUrlOnce('preview'))
 
     ;(async () => {
       const mainPromise = provider.generate(req, apiKey, {
@@ -158,7 +154,7 @@ app.whenReady().then(async () => {
         finishSlot(id)
         const mergedUsage = mergeUsage(result.usage, preview.usage)
         console.log(
-          `[rendre] llm:done id=${id} main=${result.html.length} chars preview=${preview.html.length} chars urlsFired=${urlsFired}`
+          `[rendre] llm:done id=${id} main=${result.html.length} chars preview=${preview.html.length} chars urlFired=${urlFired}`
         )
         if (!sender.isDestroyed()) {
           sender.send('llm:done', id, {

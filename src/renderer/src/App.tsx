@@ -22,7 +22,7 @@ function freshConversation(): Conversation {
 
 function turnCanvas(turn: Turn): CanvasSrc {
   if (turn.previewHtml) {
-    return { kind: 'wrapper', previewHtml: turn.previewHtml, mainHtml: turn.html }
+    return { kind: 'composed', previewHtml: turn.previewHtml, mainHtml: turn.html }
   }
   return { kind: 'turn', html: turn.html }
 }
@@ -31,49 +31,33 @@ type CanvasSrc =
   | { kind: 'skeleton'; html: string }
   | { kind: 'stream'; url: string }
   | { kind: 'turn'; html: string }
-  | {
-      kind: 'wrapper'
-      previewUrl?: string
-      mainUrl?: string
-      previewHtml?: string
-      mainHtml?: string
-    }
+  | { kind: 'composed'; previewHtml: string; mainHtml: string }
   | null
 
-function attrEscape(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+function stripDocWrappers(html: string): string {
+  return html
+    .replace(/<!doctype[^>]*>/gi, '')
+    .replace(/<\/?html[^>]*>/gi, '')
+    .replace(/<\/?head[^>]*>/gi, '')
+    .replace(/<\/?body[^>]*>/gi, '')
 }
 
-function wrapperHtml(parts: {
-  previewUrl?: string
-  mainUrl?: string
-  previewHtml?: string
-  mainHtml?: string
-}): string {
-  const previewAttr = parts.previewUrl
-    ? `src="${attrEscape(parts.previewUrl)}"`
-    : `srcdoc="${attrEscape(parts.previewHtml ?? '')}"`
-  const mainAttr = parts.mainUrl
-    ? `src="${attrEscape(parts.mainUrl)}"`
-    : `srcdoc="${attrEscape(parts.mainHtml ?? '')}"`
+function composedStaticHtml(previewHtml: string, mainHtml: string): string {
+  const preview = stripDocWrappers(previewHtml)
+  const main = stripDocWrappers(mainHtml)
   return `<!doctype html>
 <html>
 <head>
 <meta name="color-scheme" content="light dark">
 <style>
   :root { color-scheme: light dark; }
-  html, body { margin: 0; padding: 0; height: 100%; }
-  body { display: flex; flex-direction: column; background: Canvas; color: CanvasText; }
-  .preview-frame, .main-frame { border: 0; width: 100%; display: block; background: transparent; }
-  .preview-frame { height: 200px; flex: 0 0 auto; }
-  .divider { height: 1px; background: color-mix(in srgb, CanvasText 12%, transparent); flex: 0 0 auto; }
-  .main-frame { flex: 1 1 auto; min-height: 0; }
+  html, body { margin: 0; padding: 0; min-height: 100%; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 </style>
 </head>
 <body>
-  <iframe class="preview-frame" ${previewAttr} scrolling="no"></iframe>
-  <div class="divider"></div>
-  <iframe class="main-frame" ${mainAttr}></iframe>
+<div id="rendre-preview">${preview}</div>
+<div id="rendre-main">${main}</div>
 </body>
 </html>`
 }
@@ -160,7 +144,9 @@ export function App() {
       wv.src = canvasSrc.url
     } else {
       const html =
-        canvasSrc.kind === 'wrapper' ? wrapperHtml(canvasSrc) : canvasSrc.html
+        canvasSrc.kind === 'composed'
+          ? composedStaticHtml(canvasSrc.previewHtml, canvasSrc.mainHtml)
+          : canvasSrc.html
       const blob = new Blob([html], { type: 'text/html' })
       const url = URL.createObjectURL(blob)
       wv.src = url
@@ -189,14 +175,10 @@ export function App() {
 
   // Subscribe to streaming events
   useEffect(() => {
-    const offUrls = window.rendre.onStreamUrls((id, mainUrl, previewUrl) => {
-      console.log('[rendre] onStreamUrls', { id, mainUrl, previewUrl })
+    const offUrl = window.rendre.onStreamUrl((id, url) => {
+      console.log('[rendre] onStreamUrl', { id, url })
       if (!generationRef.current || generationRef.current.id !== id) return
-      if (previewUrl) {
-        setCanvasSrc({ kind: 'wrapper', mainUrl, previewUrl })
-      } else {
-        setCanvasSrc({ kind: 'stream', url: mainUrl })
-      }
+      setCanvasSrc({ kind: 'stream', url })
     })
 
     const offDone = window.rendre.onDone((id, result) => {
@@ -235,9 +217,13 @@ export function App() {
       // Leave canvasSrc alone if we're already showing the streamed wrapper/stream,
       // so the user keeps their scroll position. If the stream never produced HTML
       // (e.g. model returned plain text), fall back to the extracted HTML.
+      // If we're currently showing the streaming canvas, keep it — the wrapper page
+      // already has all the content loaded in its DOM, and swapping would cause a
+      // re-navigation flicker. Future selects will use turnCanvas to render from
+      // saved data via the composed kind.
       setCanvasSrc((prev) => {
-        if (prev?.kind === 'stream' || prev?.kind === 'wrapper') return prev
-        return { kind: 'turn', html: result.html }
+        if (prev?.kind === 'stream') return prev
+        return turnCanvas(turn)
       })
       setGenerating(false)
       setGenId(null)
@@ -248,14 +234,9 @@ export function App() {
     const offError = window.rendre.onError((id, msg) => {
       if (!generationRef.current || generationRef.current.id !== id) return
       setError(msg)
-      // Drop skeleton/in-flight wrapper, restore prior turn if there was one
+      // Drop skeleton/in-flight stream, restore prior turn if there was one
       setCanvasSrc((prev) => {
-        if (
-          prev?.kind === 'skeleton' ||
-          prev?.kind === 'stream' ||
-          prev?.kind === 'wrapper'
-        )
-          return null
+        if (prev?.kind === 'skeleton' || prev?.kind === 'stream') return null
         return prev
       })
       setGenerating(false)
@@ -278,7 +259,7 @@ export function App() {
     })
 
     return () => {
-      offUrls()
+      offUrl()
       offDone()
       offError()
       offTool()
