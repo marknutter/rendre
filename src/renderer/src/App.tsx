@@ -19,13 +19,11 @@ function freshConversation(): Conversation {
   return { id: uid(), createdAt: now, updatedAt: now, title: 'New chat', turns: [] }
 }
 
-function partialAsHtml(text: string): string | null {
-  const stripped = text.replace(/^\s*```(?:html)?\s*\n?/i, '').trim()
-  if (!/<!doctype|<html|<body/i.test(stripped)) return null
-  return stripped
-}
-
-const RENDER_THROTTLE_MS = 120
+type CanvasSrc =
+  | { kind: 'skeleton'; html: string }
+  | { kind: 'stream'; url: string }
+  | { kind: 'turn'; html: string }
+  | null
 
 export function App() {
   const [config, setConfig] = useState<ProviderConfig>(DEFAULT_CONFIG)
@@ -35,22 +33,19 @@ export function App() {
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genId, setGenId] = useState<string | null>(null)
-  const [pendingHtml, setPendingHtml] = useState<string | null>(null)
+  const [canvasSrc, setCanvasSrc] = useState<CanvasSrc>(null)
   const [lastUsage, setLastUsage] = useState<UsageStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const webviewRef = useRef<(HTMLElement & { src: string }) | null>(null)
   const lastBlobUrlRef = useRef<string | null>(null)
-  const lastRenderAtRef = useRef(0)
-  const pendingRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Refs for stream callbacks to avoid stale closures
+  // Carries the in-flight generation's metadata for the event handlers to use
   const generationRef = useRef<{
     id: string
     conv: Conversation
     prompt: string
-    isNewConv: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -64,7 +59,10 @@ export function App() {
       if (history.length > 0) {
         setActiveConvId(history[0].id)
         const lastTurn = history[0].turns[history[0].turns.length - 1]
-        if (lastTurn) setActiveTurnId(lastTurn.id)
+        if (lastTurn) {
+          setActiveTurnId(lastTurn.id)
+          setCanvasSrc({ kind: 'turn', html: lastTurn.html })
+        }
       }
       const hasKey = await window.rendre.hasKey(cfg.provider)
       if (!hasKey) setSettingsOpen(true)
@@ -75,55 +73,36 @@ export function App() {
     () => conversations.find((c) => c.id === activeConvId) ?? null,
     [conversations, activeConvId]
   )
-  const activeTurn = useMemo(
-    () => activeConv?.turns.find((t) => t.id === activeTurnId) ?? null,
-    [activeConv, activeTurnId]
-  )
 
-  const displayHtml = pendingHtml ?? activeTurn?.html ?? null
-
+  // Single source-of-truth effect: webview src follows canvasSrc identity, never updates per-chunk
   useEffect(() => {
     const wv = webviewRef.current
     if (!wv) return
-    if (!displayHtml) {
+    if (!canvasSrc) {
       wv.src = 'about:blank'
       return
     }
-    const blob = new Blob([displayHtml], { type: 'text/html' })
+    if (canvasSrc.kind === 'stream') {
+      wv.src = canvasSrc.url
+      return
+    }
+    const blob = new Blob([canvasSrc.html], { type: 'text/html' })
     const url = URL.createObjectURL(blob)
     wv.src = url
     if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current)
     lastBlobUrlRef.current = url
-  }, [displayHtml])
+  }, [canvasSrc])
 
   // Subscribe to streaming events
   useEffect(() => {
-    const offChunk = window.rendre.onChunk((id, text) => {
+    const offUrl = window.rendre.onStreamUrl((id, url) => {
       if (!generationRef.current || generationRef.current.id !== id) return
-      const htmlSlice = partialAsHtml(text)
-      if (!htmlSlice) return // still showing skeleton
-      // Throttle blob URL refresh
-      const now = Date.now()
-      const elapsed = now - lastRenderAtRef.current
-      if (elapsed >= RENDER_THROTTLE_MS) {
-        lastRenderAtRef.current = now
-        setPendingHtml(htmlSlice)
-      } else {
-        if (pendingRenderTimerRef.current) clearTimeout(pendingRenderTimerRef.current)
-        pendingRenderTimerRef.current = setTimeout(() => {
-          lastRenderAtRef.current = Date.now()
-          setPendingHtml(htmlSlice)
-        }, RENDER_THROTTLE_MS - elapsed)
-      }
+      setCanvasSrc({ kind: 'stream', url })
     })
 
     const offDone = window.rendre.onDone((id, result) => {
       if (!generationRef.current || generationRef.current.id !== id) return
-      if (pendingRenderTimerRef.current) {
-        clearTimeout(pendingRenderTimerRef.current)
-        pendingRenderTimerRef.current = null
-      }
-      const { conv, prompt: userPrompt, isNewConv } = generationRef.current
+      const { conv, prompt: userPrompt } = generationRef.current
       const turn: Turn = {
         id: uid(),
         createdAt: Date.now(),
@@ -145,8 +124,6 @@ export function App() {
         if (existingIdx >= 0) {
           next = [...prev]
           next[existingIdx] = updated
-        } else if (isNewConv) {
-          next = [updated, ...prev]
         } else {
           next = [updated, ...prev]
         }
@@ -155,7 +132,13 @@ export function App() {
       })
       setActiveTurnId(turn.id)
       if (result.usage) setLastUsage(result.usage)
-      setPendingHtml(null)
+      // Important: leave canvasSrc alone if we already navigated to a stream URL,
+      // so the user keeps their scroll position. If the stream never started
+      // (e.g. model returned plain text), fall back to the extracted HTML.
+      setCanvasSrc((prev) => {
+        if (prev?.kind === 'stream') return prev
+        return { kind: 'turn', html: result.html }
+      })
       setGenerating(false)
       setGenId(null)
       generationRef.current = null
@@ -164,14 +147,18 @@ export function App() {
     const offError = window.rendre.onError((id, msg) => {
       if (!generationRef.current || generationRef.current.id !== id) return
       setError(msg)
-      setPendingHtml(null)
+      // Drop skeleton, restore prior turn if there was one
+      setCanvasSrc((prev) => {
+        if (prev?.kind === 'skeleton' || prev?.kind === 'stream') return null
+        return prev
+      })
       setGenerating(false)
       setGenId(null)
       generationRef.current = null
     })
 
     return () => {
-      offChunk()
+      offUrl()
       offDone()
       offError()
     }
@@ -187,21 +174,17 @@ export function App() {
     setError(null)
 
     let conv = activeConv
-    let isNewConv = false
     if (!conv) {
       conv = freshConversation()
       conv.title = prompt.slice(0, 60)
-      isNewConv = true
       setActiveConvId(conv.id)
-      // optimistically place new conv at top so sidebar reflects state
       await persistConversations([conv, ...conversations])
     }
 
     const userPrompt = prompt
     setPrompt('')
     setGenerating(true)
-    setPendingHtml(skeletonHtml(userPrompt, config.provider))
-    lastRenderAtRef.current = 0
+    setCanvasSrc({ kind: 'skeleton', html: skeletonHtml(userPrompt, config.provider) })
 
     try {
       const id = await window.rendre.startGenerate({
@@ -210,12 +193,12 @@ export function App() {
         provider: config.provider,
         model: config.model
       })
-      generationRef.current = { id, conv, prompt: userPrompt, isNewConv }
+      generationRef.current = { id, conv, prompt: userPrompt }
       setGenId(id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setGenerating(false)
-      setPendingHtml(null)
+      setCanvasSrc(null)
     }
   }
 
@@ -223,14 +206,25 @@ export function App() {
     if (genId) void window.rendre.cancelGenerate(genId)
   }
 
+  function selectTurn(convId: string, turnId: string | null) {
+    setActiveConvId(convId)
+    setActiveTurnId(turnId)
+    const conv = conversations.find((c) => c.id === convId)
+    const turn = turnId ? conv?.turns.find((t) => t.id === turnId) : conv?.turns.at(-1)
+    if (turn) setCanvasSrc({ kind: 'turn', html: turn.html })
+    else setCanvasSrc(null)
+  }
+
   function newChat() {
     const conv = freshConversation()
     void persistConversations([conv, ...conversations])
     setActiveConvId(conv.id)
     setActiveTurnId(null)
+    setCanvasSrc(null)
   }
 
   const turnsForSidebar = activeConv?.turns ?? []
+  const showEmpty = canvasSrc === null
 
   return (
     <div className="app">
@@ -247,11 +241,7 @@ export function App() {
             <div key={c.id} style={{ marginBottom: 8 }}>
               <button
                 className={`turn-item ${c.id === activeConvId ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveConvId(c.id)
-                  const last = c.turns[c.turns.length - 1]
-                  setActiveTurnId(last?.id ?? null)
-                }}
+                onClick={() => selectTurn(c.id, c.turns.at(-1)?.id ?? null)}
                 style={{ fontWeight: 500 }}
               >
                 {c.title || 'Untitled'}
@@ -260,7 +250,7 @@ export function App() {
                 <button
                   key={t.id}
                   className={`turn-item ${t.id === activeTurnId ? 'active' : ''}`}
-                  onClick={() => setActiveTurnId(t.id)}
+                  onClick={() => selectTurn(c.id, t.id)}
                   style={{ paddingLeft: 22, fontSize: 12 }}
                 >
                   {i + 1}. {t.prompt.slice(0, 40)}
@@ -273,10 +263,7 @@ export function App() {
 
       <main className="main">
         <div className="canvas">
-          {displayHtml ? (
-            // @ts-expect-error webview is an Electron-only element
-            <webview ref={webviewRef as never} allowpopups="true" />
-          ) : (
+          {showEmpty ? (
             <div className="empty">
               <h1>rendre</h1>
               <p>
@@ -287,6 +274,9 @@ export function App() {
                 Try: <em>"Compare TypeScript and Rust for systems programming."</em>
               </p>
             </div>
+          ) : (
+            // @ts-expect-error webview is an Electron-only element
+            <webview ref={webviewRef as never} allowpopups="true" />
           )}
         </div>
         {error && <div className="error-banner">{error}</div>}
@@ -312,7 +302,12 @@ export function App() {
             </button>
           )}
         </div>
-        <StatusBar config={config} usage={lastUsage} generating={generating} />
+        <StatusBar
+          config={config}
+          usage={lastUsage}
+          generating={generating}
+          streamPhase={canvasSrc?.kind === 'stream'}
+        />
       </main>
 
       {settingsOpen && (
@@ -332,11 +327,13 @@ export function App() {
 function StatusBar({
   config,
   usage,
-  generating
+  generating,
+  streamPhase
 }: {
   config: ProviderConfig
   usage: UsageStats | null
   generating: boolean
+  streamPhase: boolean
 }) {
   const cacheLabel =
     usage && (usage.cacheReadTokens || usage.cacheCreationTokens)
@@ -345,11 +342,13 @@ function StatusBar({
   const usageLabel = usage
     ? ` · ${usage.inputTokens}in/${usage.outputTokens}out${cacheLabel}`
     : ''
+  let stateLabel = ' · ⌘↵ to send'
+  if (generating) stateLabel = streamPhase ? ' · streaming…' : ' · thinking…'
   return (
     <div className="status">
       {config.provider} · {config.model}
       {usageLabel}
-      {generating ? ' · streaming…' : ' · ⌘↵ to send'}
+      {stateLabel}
     </div>
   )
 }

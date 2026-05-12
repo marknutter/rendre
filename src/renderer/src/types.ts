@@ -16,7 +16,7 @@ export interface RendreApi {
 
   startGenerate: (req: GenerateRequest) => Promise<string>
   cancelGenerate: (id: string) => Promise<void>
-  onChunk: (cb: (id: string, text: string) => void) => () => void
+  onStreamUrl: (cb: (id: string, url: string) => void) => () => void
   onDone: (cb: (id: string, result: GenerateResponse) => void) => () => void
   onError: (cb: (id: string, msg: string) => void) => () => void
 }

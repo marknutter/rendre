@@ -23,10 +23,10 @@ const api = {
   cancelGenerate: (id: string): Promise<void> =>
     ipcRenderer.invoke('llm:cancel', id),
 
-  onChunk: (cb: (id: string, text: string) => void): (() => void) => {
-    const handler = (_e: unknown, id: string, text: string) => cb(id, text)
-    ipcRenderer.on('llm:chunk', handler)
-    return () => ipcRenderer.off('llm:chunk', handler)
+  onStreamUrl: (cb: (id: string, url: string) => void): (() => void) => {
+    const handler = (_e: unknown, id: string, url: string) => cb(id, url)
+    ipcRenderer.on('llm:url', handler)
+    return () => ipcRenderer.off('llm:url', handler)
   },
   onDone: (cb: (id: string, result: GenerateResponse) => void): (() => void) => {
     const handler = (_e: unknown, id: string, result: GenerateResponse) =>

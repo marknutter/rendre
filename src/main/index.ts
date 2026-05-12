@@ -8,6 +8,14 @@ import {
   saveConfig
 } from './store'
 import { getKey, setKey, hasKey } from './keys'
+import {
+  startStreamServer,
+  createSlot,
+  getStreamUrl,
+  pushChunk,
+  finishSlot,
+  failSlot
+} from './streamServer'
 import type {
   Conversation,
   GenerateRequest,
@@ -50,7 +58,9 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await startStreamServer()
+
   ipcMain.handle('config:get', () => loadConfig())
   ipcMain.handle('config:set', (_e, c: ProviderConfig) => saveConfig(c))
 
@@ -74,17 +84,21 @@ app.whenReady().then(() => {
     const provider = getProvider(req.provider)
     const sender = e.sender
 
+    createSlot(id, () => {
+      if (!sender.isDestroyed()) sender.send('llm:url', id, getStreamUrl(id))
+    })
+
     ;(async () => {
       try {
         const result = await provider.generate(req, apiKey, {
           signal: ac.signal,
-          onChunk: (text) => {
-            if (!sender.isDestroyed()) sender.send('llm:chunk', id, text)
-          }
+          onChunk: (text) => pushChunk(id, text)
         })
+        finishSlot(id)
         if (!sender.isDestroyed()) sender.send('llm:done', id, result)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
+        failSlot(id)
         if (!sender.isDestroyed()) sender.send('llm:error', id, msg)
       } finally {
         activeGenerations.delete(id)
