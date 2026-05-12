@@ -3,7 +3,8 @@ import type {
   GenerateRequest,
   GenerateResponse,
   ProviderConfig,
-  ProviderId
+  ProviderId,
+  ToolUseEvent
 } from '../../shared/types'
 
 export interface RendreApi {
@@ -19,6 +20,7 @@ export interface RendreApi {
   onStreamUrl: (cb: (id: string, url: string) => void) => () => void
   onDone: (cb: (id: string, result: GenerateResponse) => void) => () => void
   onError: (cb: (id: string, msg: string) => void) => () => void
+  onTool: (cb: (id: string, event: ToolUseEvent) => void) => () => void
 }
 
 declare global {

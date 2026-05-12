@@ -92,7 +92,10 @@ app.whenReady().then(async () => {
       try {
         const result = await provider.generate(req, apiKey, {
           signal: ac.signal,
-          onChunk: (text) => pushChunk(id, text)
+          onChunk: (text) => pushChunk(id, text),
+          onTool: (event) => {
+            if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
+          }
         })
         finishSlot(id)
         if (!sender.isDestroyed()) sender.send('llm:done', id, result)

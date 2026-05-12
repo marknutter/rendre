@@ -74,8 +74,14 @@ export function skeletonHtml(prompt: string, providerLabel: string): string {
 <body>
   <div class="meta">
     <span class="dot"></span>
-    <span>${providerLabel} is composing a webpage…</span>
+    <span id="rendre-status">${providerLabel} is composing a webpage…</span>
   </div>
+  <script>
+    window.__rendreSetStatus = function (text) {
+      var el = document.getElementById('rendre-status');
+      if (el) el.textContent = text;
+    };
+  </script>
 
   <div class="prompt">${safePrompt}</div>
 

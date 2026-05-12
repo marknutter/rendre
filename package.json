@@ -16,7 +16,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
+    "@mozilla/readability": "0.6.0",
     "keytar": "7.9.0",
+    "linkedom": "0.18.12",
     "openai": "4.73.1"
   },
   "devDependencies": {
