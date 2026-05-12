@@ -98,10 +98,10 @@ app.whenReady().then(async () => {
     const sender = e.sender
     const hasPreview = typeof provider.generatePreview === 'function'
 
-    let mainReady = false
-    let previewReady = false
-    const fireReadyOnce = () => {
-      if (mainReady || previewReady) return
+    let urlsFired = false
+    const fireUrlsOnce = () => {
+      if (urlsFired) return
+      urlsFired = true
       if (!sender.isDestroyed()) {
         sender.send(
           'llm:urls',
@@ -112,16 +112,8 @@ app.whenReady().then(async () => {
       }
     }
 
-    createSlot(id, () => {
-      mainReady = true
-      fireReadyOnce()
-    })
-    if (hasPreview) {
-      createSlot(previewId, () => {
-        previewReady = true
-        fireReadyOnce()
-      })
-    }
+    createSlot(id, fireUrlsOnce)
+    if (hasPreview) createSlot(previewId, fireUrlsOnce)
 
     ;(async () => {
       const mainPromise = provider.generate(req, apiKey, {
