@@ -6,6 +6,7 @@ import type {
 } from '../../shared/types'
 import { DEFAULT_CONFIG } from '../../shared/types'
 import { Settings } from './Settings'
+import { skeletonHtml } from './skeleton'
 import './types'
 
 function uid(): string {
@@ -24,6 +25,7 @@ export function App() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [pendingHtml, setPendingHtml] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const webviewRef = useRef<(HTMLElement & { src: string }) | null>(null)
@@ -55,16 +57,18 @@ export function App() {
     [activeConv, activeTurnId]
   )
 
+  const displayHtml = pendingHtml ?? activeTurn?.html ?? null
+
   useEffect(() => {
     const wv = webviewRef.current
     if (!wv) return
-    if (!activeTurn) {
+    if (!displayHtml) {
       wv.src = 'about:blank'
       return
     }
-    const blob = new Blob([activeTurn.html], { type: 'text/html' })
+    const blob = new Blob([displayHtml], { type: 'text/html' })
     wv.src = URL.createObjectURL(blob)
-  }, [activeTurn])
+  }, [displayHtml])
 
   async function persist(next: Conversation[]) {
     setConversations(next)
@@ -87,6 +91,7 @@ export function App() {
     const userPrompt = prompt
     setPrompt('')
     setGenerating(true)
+    setPendingHtml(skeletonHtml(userPrompt, config.provider))
     try {
       const res = await window.rendre.generate({
         prompt: userPrompt,
@@ -116,6 +121,7 @@ export function App() {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setGenerating(false)
+      setPendingHtml(null)
     }
   }
 
@@ -169,7 +175,7 @@ export function App() {
 
       <main className="main">
         <div className="canvas">
-          {activeTurn ? (
+          {displayHtml ? (
             // @ts-expect-error webview is an Electron-only element
             <webview ref={webviewRef as never} allowpopups="true" />
           ) : (
@@ -180,7 +186,7 @@ export function App() {
                 — layouts, charts, mini-apps, whatever fits your prompt.
               </p>
               <p style={{ marginTop: 16 }}>
-                Try: <em>“Compare TypeScript and Rust for systems programming.”</em>
+                Try: <em>"Compare TypeScript and Rust for systems programming."</em>
               </p>
             </div>
           )}
