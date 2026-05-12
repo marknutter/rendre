@@ -13,7 +13,12 @@ export interface RendreApi {
   setHistory: (c: Conversation[]) => Promise<void>
   hasKey: (p: ProviderId) => Promise<boolean>
   setKey: (p: ProviderId, k: string) => Promise<void>
-  generate: (req: GenerateRequest) => Promise<GenerateResponse>
+
+  startGenerate: (req: GenerateRequest) => Promise<string>
+  cancelGenerate: (id: string) => Promise<void>
+  onChunk: (cb: (id: string, text: string) => void) => () => void
+  onDone: (cb: (id: string, result: GenerateResponse) => void) => () => void
+  onError: (cb: (id: string, msg: string) => void) => () => void
 }
 
 declare global {

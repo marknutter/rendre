@@ -7,6 +7,7 @@ export interface Turn {
   html: string
   provider: ProviderId
   model: string
+  usage?: UsageStats
 }
 
 export interface Conversation {
@@ -29,8 +30,16 @@ export interface GenerateRequest {
   model: string
 }
 
+export interface UsageStats {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+}
+
 export interface GenerateResponse {
   html: string
+  usage?: UsageStats
 }
 
 export const ANTHROPIC_MODELS = [

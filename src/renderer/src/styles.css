@@ -151,6 +151,8 @@ html, body, #root {
   font-weight: 500;
 }
 .send:disabled { opacity: 0.5; cursor: not-allowed; }
+.send.cancel { background: #6e2929; }
+.send.cancel:hover { background: #823434; }
 
 .modal-backdrop {
   position: fixed; inset: 0;

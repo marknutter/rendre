@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Conversation,
   ProviderConfig,
-  Turn
+  Turn,
+  UsageStats
 } from '../../shared/types'
 import { DEFAULT_CONFIG } from '../../shared/types'
 import { Settings } from './Settings'
@@ -18,6 +19,14 @@ function freshConversation(): Conversation {
   return { id: uid(), createdAt: now, updatedAt: now, title: 'New chat', turns: [] }
 }
 
+function partialAsHtml(text: string): string | null {
+  const stripped = text.replace(/^\s*```(?:html)?\s*\n?/i, '').trim()
+  if (!/<!doctype|<html|<body/i.test(stripped)) return null
+  return stripped
+}
+
+const RENDER_THROTTLE_MS = 120
+
 export function App() {
   const [config, setConfig] = useState<ProviderConfig>(DEFAULT_CONFIG)
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -25,10 +34,24 @@ export function App() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
+  const [genId, setGenId] = useState<string | null>(null)
   const [pendingHtml, setPendingHtml] = useState<string | null>(null)
+  const [lastUsage, setLastUsage] = useState<UsageStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+
   const webviewRef = useRef<(HTMLElement & { src: string }) | null>(null)
+  const lastBlobUrlRef = useRef<string | null>(null)
+  const lastRenderAtRef = useRef(0)
+  const pendingRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Refs for stream callbacks to avoid stale closures
+  const generationRef = useRef<{
+    id: string
+    conv: Conversation
+    prompt: string
+    isNewConv: boolean
+  } | null>(null)
 
   useEffect(() => {
     void (async () => {
@@ -67,10 +90,94 @@ export function App() {
       return
     }
     const blob = new Blob([displayHtml], { type: 'text/html' })
-    wv.src = URL.createObjectURL(blob)
+    const url = URL.createObjectURL(blob)
+    wv.src = url
+    if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current)
+    lastBlobUrlRef.current = url
   }, [displayHtml])
 
-  async function persist(next: Conversation[]) {
+  // Subscribe to streaming events
+  useEffect(() => {
+    const offChunk = window.rendre.onChunk((id, text) => {
+      if (!generationRef.current || generationRef.current.id !== id) return
+      const htmlSlice = partialAsHtml(text)
+      if (!htmlSlice) return // still showing skeleton
+      // Throttle blob URL refresh
+      const now = Date.now()
+      const elapsed = now - lastRenderAtRef.current
+      if (elapsed >= RENDER_THROTTLE_MS) {
+        lastRenderAtRef.current = now
+        setPendingHtml(htmlSlice)
+      } else {
+        if (pendingRenderTimerRef.current) clearTimeout(pendingRenderTimerRef.current)
+        pendingRenderTimerRef.current = setTimeout(() => {
+          lastRenderAtRef.current = Date.now()
+          setPendingHtml(htmlSlice)
+        }, RENDER_THROTTLE_MS - elapsed)
+      }
+    })
+
+    const offDone = window.rendre.onDone((id, result) => {
+      if (!generationRef.current || generationRef.current.id !== id) return
+      if (pendingRenderTimerRef.current) {
+        clearTimeout(pendingRenderTimerRef.current)
+        pendingRenderTimerRef.current = null
+      }
+      const { conv, prompt: userPrompt, isNewConv } = generationRef.current
+      const turn: Turn = {
+        id: uid(),
+        createdAt: Date.now(),
+        prompt: userPrompt,
+        html: result.html,
+        provider: config.provider,
+        model: config.model,
+        usage: result.usage
+      }
+      setConversations((prev) => {
+        const existingIdx = prev.findIndex((c) => c.id === conv.id)
+        const updated: Conversation = {
+          ...conv,
+          updatedAt: Date.now(),
+          title: conv.turns.length === 0 ? userPrompt.slice(0, 60) : conv.title,
+          turns: [...conv.turns, turn]
+        }
+        let next: Conversation[]
+        if (existingIdx >= 0) {
+          next = [...prev]
+          next[existingIdx] = updated
+        } else if (isNewConv) {
+          next = [updated, ...prev]
+        } else {
+          next = [updated, ...prev]
+        }
+        void window.rendre.setHistory(next)
+        return next
+      })
+      setActiveTurnId(turn.id)
+      if (result.usage) setLastUsage(result.usage)
+      setPendingHtml(null)
+      setGenerating(false)
+      setGenId(null)
+      generationRef.current = null
+    })
+
+    const offError = window.rendre.onError((id, msg) => {
+      if (!generationRef.current || generationRef.current.id !== id) return
+      setError(msg)
+      setPendingHtml(null)
+      setGenerating(false)
+      setGenId(null)
+      generationRef.current = null
+    })
+
+    return () => {
+      offChunk()
+      offDone()
+      offError()
+    }
+  }, [config.provider, config.model])
+
+  async function persistConversations(next: Conversation[]) {
     setConversations(next)
     await window.rendre.setHistory(next)
   }
@@ -80,54 +187,45 @@ export function App() {
     setError(null)
 
     let conv = activeConv
-    let convs = conversations
+    let isNewConv = false
     if (!conv) {
       conv = freshConversation()
       conv.title = prompt.slice(0, 60)
-      convs = [conv, ...conversations]
+      isNewConv = true
       setActiveConvId(conv.id)
+      // optimistically place new conv at top so sidebar reflects state
+      await persistConversations([conv, ...conversations])
     }
 
     const userPrompt = prompt
     setPrompt('')
     setGenerating(true)
     setPendingHtml(skeletonHtml(userPrompt, config.provider))
+    lastRenderAtRef.current = 0
+
     try {
-      const res = await window.rendre.generate({
+      const id = await window.rendre.startGenerate({
         prompt: userPrompt,
         history: conv.turns,
         provider: config.provider,
         model: config.model
       })
-      const turn: Turn = {
-        id: uid(),
-        createdAt: Date.now(),
-        prompt: userPrompt,
-        html: res.html,
-        provider: config.provider,
-        model: config.model
-      }
-      const updatedConv: Conversation = {
-        ...conv,
-        updatedAt: Date.now(),
-        title: conv.turns.length === 0 ? userPrompt.slice(0, 60) : conv.title,
-        turns: [...conv.turns, turn]
-      }
-      const nextConvs = convs.map((c) => (c.id === conv!.id ? updatedConv : c))
-      if (!convs.some((c) => c.id === conv!.id)) nextConvs.unshift(updatedConv)
-      await persist(nextConvs)
-      setActiveTurnId(turn.id)
+      generationRef.current = { id, conv, prompt: userPrompt, isNewConv }
+      setGenId(id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-    } finally {
       setGenerating(false)
       setPendingHtml(null)
     }
   }
 
+  function cancelGeneration() {
+    if (genId) void window.rendre.cancelGenerate(genId)
+  }
+
   function newChat() {
     const conv = freshConversation()
-    void persist([conv, ...conversations])
+    void persistConversations([conv, ...conversations])
     setActiveConvId(conv.id)
     setActiveTurnId(null)
   }
@@ -206,13 +304,15 @@ export function App() {
             }}
             rows={2}
           />
-          <button className="send" onClick={() => void sendPrompt()} disabled={generating || !prompt.trim()}>
-            {generating ? '…' : 'Send'}
-          </button>
+          {generating ? (
+            <button className="send cancel" onClick={cancelGeneration}>Stop</button>
+          ) : (
+            <button className="send" onClick={() => void sendPrompt()} disabled={!prompt.trim()}>
+              Send
+            </button>
+          )}
         </div>
-        <div className="status">
-          {config.provider} · {config.model} · ⌘↵ to send
-        </div>
+        <StatusBar config={config} usage={lastUsage} generating={generating} />
       </main>
 
       {settingsOpen && (
@@ -225,6 +325,31 @@ export function App() {
           }}
         />
       )}
+    </div>
+  )
+}
+
+function StatusBar({
+  config,
+  usage,
+  generating
+}: {
+  config: ProviderConfig
+  usage: UsageStats | null
+  generating: boolean
+}) {
+  const cacheLabel =
+    usage && (usage.cacheReadTokens || usage.cacheCreationTokens)
+      ? ` · cache ${usage.cacheReadTokens ?? 0}r/${usage.cacheCreationTokens ?? 0}w`
+      : ''
+  const usageLabel = usage
+    ? ` · ${usage.inputTokens}in/${usage.outputTokens}out${cacheLabel}`
+    : ''
+  return (
+    <div className="status">
+      {config.provider} · {config.model}
+      {usageLabel}
+      {generating ? ' · streaming…' : ' · ⌘↵ to send'}
     </div>
   )
 }

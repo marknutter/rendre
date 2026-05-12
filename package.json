@@ -15,9 +15,9 @@
     "build:linux": "electron-vite build && electron-builder --linux --config"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.32.1",
-    "openai": "4.73.1",
-    "keytar": "7.9.0"
+    "@anthropic-ai/sdk": "^0.95.1",
+    "keytar": "7.9.0",
+    "openai": "4.73.1"
   },
   "devDependencies": {
     "@types/node": "22.10.2",

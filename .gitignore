@@ -9,6 +9,9 @@ dist/
 # electron-vite
 .vite/
 
+# tsc incremental build cache
+*.tsbuildinfo
+
 # editor
 .vscode/
 .idea/

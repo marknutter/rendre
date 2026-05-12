@@ -15,6 +15,12 @@ import type {
   ProviderId
 } from '../shared/types'
 
+function uid(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+const activeGenerations = new Map<string, AbortController>()
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1400,
@@ -54,12 +60,43 @@ app.whenReady().then(() => {
   ipcMain.handle('keys:has', (_e, p: ProviderId) => hasKey(p))
   ipcMain.handle('keys:set', (_e, p: ProviderId, k: string) => setKey(p, k))
 
-  ipcMain.handle('llm:generate', async (_e, req: GenerateRequest) => {
-    const key = await getKey(req.provider)
-    if (!key) throw new Error(`No API key set for ${req.provider}`)
+  ipcMain.handle('llm:start', async (e, req: GenerateRequest) => {
+    const id = uid()
+    const ac = new AbortController()
+    activeGenerations.set(id, ac)
+
+    const apiKey = await getKey(req.provider)
+    if (!apiKey) {
+      activeGenerations.delete(id)
+      throw new Error(`No API key set for ${req.provider}`)
+    }
+
     const provider = getProvider(req.provider)
-    const html = await provider.generate(req, key)
-    return { html }
+    const sender = e.sender
+
+    ;(async () => {
+      try {
+        const result = await provider.generate(req, apiKey, {
+          signal: ac.signal,
+          onChunk: (text) => {
+            if (!sender.isDestroyed()) sender.send('llm:chunk', id, text)
+          }
+        })
+        if (!sender.isDestroyed()) sender.send('llm:done', id, result)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!sender.isDestroyed()) sender.send('llm:error', id, msg)
+      } finally {
+        activeGenerations.delete(id)
+      }
+    })()
+
+    return id
+  })
+
+  ipcMain.handle('llm:cancel', (_e, id: string) => {
+    const ac = activeGenerations.get(id)
+    if (ac) ac.abort()
   })
 
   createWindow()
