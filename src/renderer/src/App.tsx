@@ -20,11 +20,63 @@ function freshConversation(): Conversation {
   return { id: uid(), createdAt: now, updatedAt: now, title: 'New chat', turns: [] }
 }
 
+function turnCanvas(turn: Turn): CanvasSrc {
+  if (turn.previewHtml) {
+    return { kind: 'wrapper', previewHtml: turn.previewHtml, mainHtml: turn.html }
+  }
+  return { kind: 'turn', html: turn.html }
+}
+
 type CanvasSrc =
   | { kind: 'skeleton'; html: string }
   | { kind: 'stream'; url: string }
   | { kind: 'turn'; html: string }
+  | {
+      kind: 'wrapper'
+      previewUrl?: string
+      mainUrl?: string
+      previewHtml?: string
+      mainHtml?: string
+    }
   | null
+
+function attrEscape(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+}
+
+function wrapperHtml(parts: {
+  previewUrl?: string
+  mainUrl?: string
+  previewHtml?: string
+  mainHtml?: string
+}): string {
+  const previewAttr = parts.previewUrl
+    ? `src="${attrEscape(parts.previewUrl)}"`
+    : `srcdoc="${attrEscape(parts.previewHtml ?? '')}"`
+  const mainAttr = parts.mainUrl
+    ? `src="${attrEscape(parts.mainUrl)}"`
+    : `srcdoc="${attrEscape(parts.mainHtml ?? '')}"`
+  return `<!doctype html>
+<html>
+<head>
+<meta name="color-scheme" content="light dark">
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body { display: flex; flex-direction: column; background: Canvas; color: CanvasText; }
+  .preview-frame, .main-frame { border: 0; width: 100%; display: block; background: transparent; }
+  .preview-frame { height: 200px; flex: 0 0 auto; }
+  .divider { height: 1px; background: color-mix(in srgb, CanvasText 12%, transparent); flex: 0 0 auto; }
+  .main-frame { flex: 1 1 auto; min-height: 0; }
+</style>
+</head>
+<body>
+  <iframe class="preview-frame" ${previewAttr} scrolling="no"></iframe>
+  <div class="divider"></div>
+  <iframe class="main-frame" ${mainAttr}></iframe>
+</body>
+</html>`
+}
 
 export function App() {
   const [config, setConfig] = useState<ProviderConfig>(DEFAULT_CONFIG)
@@ -79,7 +131,7 @@ export function App() {
         const lastTurn = history[0].turns[history[0].turns.length - 1]
         if (lastTurn) {
           setActiveTurnId(lastTurn.id)
-          setCanvasSrc({ kind: 'turn', html: lastTurn.html })
+          setCanvasSrc(turnCanvas(lastTurn))
         }
       }
       const hasKey = await window.rendre.hasKey(cfg.provider)
@@ -107,7 +159,9 @@ export function App() {
     } else if (canvasSrc.kind === 'stream') {
       wv.src = canvasSrc.url
     } else {
-      const blob = new Blob([canvasSrc.html], { type: 'text/html' })
+      const html =
+        canvasSrc.kind === 'wrapper' ? wrapperHtml(canvasSrc) : canvasSrc.html
+      const blob = new Blob([html], { type: 'text/html' })
       const url = URL.createObjectURL(blob)
       wv.src = url
       if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current)
@@ -135,9 +189,13 @@ export function App() {
 
   // Subscribe to streaming events
   useEffect(() => {
-    const offUrl = window.rendre.onStreamUrl((id, url) => {
+    const offUrls = window.rendre.onStreamUrls((id, mainUrl, previewUrl) => {
       if (!generationRef.current || generationRef.current.id !== id) return
-      setCanvasSrc({ kind: 'stream', url })
+      if (previewUrl) {
+        setCanvasSrc({ kind: 'wrapper', mainUrl, previewUrl })
+      } else {
+        setCanvasSrc({ kind: 'stream', url: mainUrl })
+      }
     })
 
     const offDone = window.rendre.onDone((id, result) => {
@@ -148,6 +206,7 @@ export function App() {
         createdAt: Date.now(),
         prompt: userPrompt,
         html: result.html,
+        previewHtml: result.previewHtml,
         provider: config.provider,
         model: config.model,
         usage: result.usage
@@ -172,11 +231,11 @@ export function App() {
       })
       setActiveTurnId(turn.id)
       if (result.usage) setLastUsage(result.usage)
-      // Important: leave canvasSrc alone if we already navigated to a stream URL,
-      // so the user keeps their scroll position. If the stream never started
+      // Leave canvasSrc alone if we're already showing the streamed wrapper/stream,
+      // so the user keeps their scroll position. If the stream never produced HTML
       // (e.g. model returned plain text), fall back to the extracted HTML.
       setCanvasSrc((prev) => {
-        if (prev?.kind === 'stream') return prev
+        if (prev?.kind === 'stream' || prev?.kind === 'wrapper') return prev
         return { kind: 'turn', html: result.html }
       })
       setGenerating(false)
@@ -188,9 +247,14 @@ export function App() {
     const offError = window.rendre.onError((id, msg) => {
       if (!generationRef.current || generationRef.current.id !== id) return
       setError(msg)
-      // Drop skeleton, restore prior turn if there was one
+      // Drop skeleton/in-flight wrapper, restore prior turn if there was one
       setCanvasSrc((prev) => {
-        if (prev?.kind === 'skeleton' || prev?.kind === 'stream') return null
+        if (
+          prev?.kind === 'skeleton' ||
+          prev?.kind === 'stream' ||
+          prev?.kind === 'wrapper'
+        )
+          return null
         return prev
       })
       setGenerating(false)
@@ -213,7 +277,7 @@ export function App() {
     })
 
     return () => {
-      offUrl()
+      offUrls()
       offDone()
       offError()
       offTool()
@@ -268,7 +332,7 @@ export function App() {
     setActiveTurnId(turnId)
     const conv = conversations.find((c) => c.id === convId)
     const turn = turnId ? conv?.turns.find((t) => t.id === turnId) : conv?.turns.at(-1)
-    if (turn) setCanvasSrc({ kind: 'turn', html: turn.html })
+    if (turn) setCanvasSrc(turnCanvas(turn))
     else setCanvasSrc(null)
   }
 

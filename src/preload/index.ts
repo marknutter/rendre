@@ -24,10 +24,17 @@ const api = {
   cancelGenerate: (id: string): Promise<void> =>
     ipcRenderer.invoke('llm:cancel', id),
 
-  onStreamUrl: (cb: (id: string, url: string) => void): (() => void) => {
-    const handler = (_e: unknown, id: string, url: string) => cb(id, url)
-    ipcRenderer.on('llm:url', handler)
-    return () => ipcRenderer.off('llm:url', handler)
+  onStreamUrls: (
+    cb: (id: string, mainUrl: string, previewUrl: string | null) => void
+  ): (() => void) => {
+    const handler = (
+      _e: unknown,
+      id: string,
+      mainUrl: string,
+      previewUrl: string | null
+    ) => cb(id, mainUrl, previewUrl)
+    ipcRenderer.on('llm:urls', handler)
+    return () => ipcRenderer.off('llm:urls', handler)
   },
   onDone: (cb: (id: string, result: GenerateResponse) => void): (() => void) => {
     const handler = (_e: unknown, id: string, result: GenerateResponse) =>

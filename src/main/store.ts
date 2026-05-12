@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Conversation, ProviderConfig } from '../shared/types'
-import { DEFAULT_CONFIG } from '../shared/types'
+import { DEFAULT_CONFIG, HAIKU_MODEL } from '../shared/types'
 
 function historyPath(): string {
   return join(app.getPath('userData'), 'history.json')
@@ -29,7 +29,11 @@ export async function saveConversations(conversations: Conversation[]): Promise<
 export async function loadConfig(): Promise<ProviderConfig> {
   try {
     const raw = await fs.readFile(configPath(), 'utf8')
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) }
+    const merged: ProviderConfig = { ...DEFAULT_CONFIG, ...JSON.parse(raw) }
+    if (merged.provider === 'anthropic' && merged.model === HAIKU_MODEL) {
+      merged.model = DEFAULT_CONFIG.model
+    }
+    return merged
   } catch {
     return DEFAULT_CONFIG
   }

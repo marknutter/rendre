@@ -6,6 +6,7 @@ export interface Turn {
   createdAt: number
   prompt: string
   html: string
+  previewHtml?: string
   provider: ProviderId
   model: string
   usage?: UsageStats
@@ -41,8 +42,11 @@ export interface UsageStats {
 
 export interface GenerateResponse {
   html: string
+  previewHtml?: string
   usage?: UsageStats
 }
+
+export const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 
 export interface ToolUseEvent {
   type: 'start' | 'done' | 'error'

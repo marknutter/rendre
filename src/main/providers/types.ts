@@ -16,4 +16,5 @@ export interface ProviderResult {
 export interface LLMProvider {
   id: string
   generate(req: GenerateRequest, apiKey: string, opts?: GenerateOptions): Promise<ProviderResult>
+  generatePreview?(req: GenerateRequest, apiKey: string, opts?: GenerateOptions): Promise<ProviderResult>
 }

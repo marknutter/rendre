@@ -20,11 +20,23 @@ import type {
   Conversation,
   GenerateRequest,
   ProviderConfig,
-  ProviderId
+  ProviderId,
+  UsageStats
 } from '../shared/types'
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function mergeUsage(main?: UsageStats, preview?: UsageStats): UsageStats | undefined {
+  if (!main && !preview) return undefined
+  return {
+    inputTokens: (main?.inputTokens ?? 0) + (preview?.inputTokens ?? 0),
+    outputTokens: (main?.outputTokens ?? 0) + (preview?.outputTokens ?? 0),
+    cacheReadTokens: (main?.cacheReadTokens ?? 0) + (preview?.cacheReadTokens ?? 0),
+    cacheCreationTokens:
+      (main?.cacheCreationTokens ?? 0) + (preview?.cacheCreationTokens ?? 0)
+  }
 }
 
 const activeGenerations = new Map<string, AbortController>()
@@ -72,6 +84,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('llm:start', async (e, req: GenerateRequest) => {
     const id = uid()
+    const previewId = `${id}:preview`
     const ac = new AbortController()
     activeGenerations.set(id, ac)
 
@@ -83,25 +96,80 @@ app.whenReady().then(async () => {
 
     const provider = getProvider(req.provider)
     const sender = e.sender
+    const hasPreview = typeof provider.generatePreview === 'function'
+
+    let mainReady = false
+    let previewReady = false
+    const fireReadyOnce = () => {
+      if (mainReady || previewReady) return
+      if (!sender.isDestroyed()) {
+        sender.send(
+          'llm:urls',
+          id,
+          getStreamUrl(id),
+          hasPreview ? getStreamUrl(previewId) : null
+        )
+      }
+    }
 
     createSlot(id, () => {
-      if (!sender.isDestroyed()) sender.send('llm:url', id, getStreamUrl(id))
+      mainReady = true
+      fireReadyOnce()
     })
+    if (hasPreview) {
+      createSlot(previewId, () => {
+        previewReady = true
+        fireReadyOnce()
+      })
+    }
 
     ;(async () => {
+      const mainPromise = provider.generate(req, apiKey, {
+        signal: ac.signal,
+        onChunk: (text) => pushChunk(id, text),
+        onTool: (event) => {
+          if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
+        }
+      })
+
+      const previewPromise = hasPreview
+        ? provider
+            .generatePreview!(req, apiKey, {
+              signal: ac.signal,
+              onChunk: (text) => pushChunk(previewId, text),
+              onTool: (event) => {
+                if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
+              }
+            })
+            .then((r) => {
+              finishSlot(previewId)
+              return r
+            })
+            .catch((err) => {
+              failSlot(previewId)
+              return {
+                html: '',
+                usage: undefined,
+                _error: err instanceof Error ? err.message : String(err)
+              }
+            })
+        : Promise.resolve({ html: '', usage: undefined })
+
       try {
-        const result = await provider.generate(req, apiKey, {
-          signal: ac.signal,
-          onChunk: (text) => pushChunk(id, text),
-          onTool: (event) => {
-            if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
-          }
-        })
+        const [result, preview] = await Promise.all([mainPromise, previewPromise])
         finishSlot(id)
-        if (!sender.isDestroyed()) sender.send('llm:done', id, result)
+        const mergedUsage = mergeUsage(result.usage, preview.usage)
+        if (!sender.isDestroyed()) {
+          sender.send('llm:done', id, {
+            html: result.html,
+            previewHtml: preview.html || undefined,
+            usage: mergedUsage
+          })
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         failSlot(id)
+        if (hasPreview) failSlot(previewId)
         if (!sender.isDestroyed()) sender.send('llm:error', id, msg)
       } finally {
         activeGenerations.delete(id)

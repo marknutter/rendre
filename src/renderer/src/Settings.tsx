@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ProviderConfig, ProviderId } from '../../shared/types'
-import { ANTHROPIC_MODELS, OPENAI_MODELS } from '../../shared/types'
+import { ANTHROPIC_MODELS, HAIKU_MODEL, OPENAI_MODELS } from '../../shared/types'
 
 interface Props {
   config: ProviderConfig
@@ -15,16 +15,18 @@ export function Settings({ config, onClose, onSaved }: Props) {
   const [hasKey, setHasKey] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const models = provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS
+  // Haiku is reserved for the parallel scaffold model — not selectable as the main model
+  const models = useMemo<readonly string[]>(() => {
+    if (provider === 'anthropic') return ANTHROPIC_MODELS.filter((m) => m !== HAIKU_MODEL)
+    return OPENAI_MODELS
+  }, [provider])
 
   useEffect(() => {
     void window.rendre.hasKey(provider).then(setHasKey)
   }, [provider])
 
   useEffect(() => {
-    if (!(models as readonly string[]).includes(model)) {
-      setModel(models[0])
-    }
+    if (!models.includes(model)) setModel(models[0])
   }, [provider, model, models])
 
   async function save() {
