@@ -7,6 +7,7 @@ import type {
   UsageStats
 } from '../../shared/types'
 import { DEFAULT_CONFIG } from '../../shared/types'
+import { wrapperPageHtml } from '../../shared/wrapper'
 import { Settings } from './Settings'
 import { skeletonHtml } from './skeleton'
 import './types'
@@ -34,32 +35,11 @@ type CanvasSrc =
   | { kind: 'composed'; previewHtml: string; mainHtml: string }
   | null
 
-function stripDocWrappers(html: string): string {
-  return html
-    .replace(/<!doctype[^>]*>/gi, '')
-    .replace(/<\/?html[^>]*>/gi, '')
-    .replace(/<\/?head[^>]*>/gi, '')
-    .replace(/<\/?body[^>]*>/gi, '')
-}
-
 function composedStaticHtml(previewHtml: string, mainHtml: string): string {
-  const preview = stripDocWrappers(previewHtml)
-  const main = stripDocWrappers(mainHtml)
-  return `<!doctype html>
-<html>
-<head>
-<meta name="color-scheme" content="light dark">
-<style>
-  :root { color-scheme: light dark; }
-  html, body { margin: 0; padding: 0; min-height: 100%; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-</style>
-</head>
-<body>
-<div id="rendre-preview">${preview}</div>
-<div id="rendre-main">${main}</div>
-</body>
-</html>`
+  return wrapperPageHtml({
+    preview: { srcdoc: previewHtml },
+    main: { srcdoc: mainHtml }
+  })
 }
 
 export function App() {

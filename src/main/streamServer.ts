@@ -1,9 +1,11 @@
 import { createServer, type ServerResponse } from 'http'
 import type { AddressInfo } from 'net'
+import { wrapperPageHtml } from '../shared/wrapper'
 
 interface Slot {
   rawBuffer: string
   htmlOffset: number | null
+  htmlEnd: number | null
   lastSent: number
   res: ServerResponse | null
   done: boolean
@@ -41,9 +43,10 @@ export function startStreamServer(): Promise<number> {
       res.setHeader('Cache-Control', 'no-store')
       res.setHeader('X-Content-Type-Options', 'nosniff')
 
-      // Dump whatever we have buffered so far
+      // Dump whatever we have buffered so far (truncated at </html> if seen)
       if (slot.htmlOffset !== null) {
-        const available = slot.rawBuffer.slice(slot.htmlOffset)
+        const end = slot.htmlEnd ?? slot.rawBuffer.length
+        const available = slot.rawBuffer.slice(slot.htmlOffset, end)
         if (available) res.write(available)
         slot.lastSent = available.length
       }
@@ -74,68 +77,12 @@ function serveComposed(id: string, res: ServerResponse): void {
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Content-Type-Options', 'nosniff')
-  const mainUrl = `/gen/${id}`
-  const previewUrl = `/gen/${id}:preview`
-  res.end(composedWrapperHtml(mainUrl, previewUrl))
-}
-
-function composedWrapperHtml(mainPath: string, previewPath: string): string {
-  return `<!doctype html>
-<html>
-<head>
-<meta name="color-scheme" content="light dark">
-<style>
-  :root { color-scheme: light dark; }
-  html, body { margin: 0; padding: 0; min-height: 100%; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-</style>
-</head>
-<body>
-<div id="rendre-preview"></div>
-<div id="rendre-main"></div>
-<script>
-(function() {
-  function strip(buf) {
-    return buf
-      .replace(/<!doctype[^>]*>/gi, '')
-      .replace(/<\\/?html[^>]*>/gi, '')
-      .replace(/<\\/?head[^>]*>/gi, '')
-      .replace(/<\\/?body[^>]*>/gi, '');
-  }
-  async function streamInto(path, targetId) {
-    if (!path) return;
-    var target = document.getElementById(targetId);
-    if (!target) return;
-    try {
-      var res = await fetch(path);
-      if (!res.ok || !res.body) return;
-      var reader = res.body.getReader();
-      var decoder = new TextDecoder();
-      var buf = '';
-      var emitted = 0;
-      while (true) {
-        var chunk = await reader.read();
-        if (chunk.done) break;
-        buf += decoder.decode(chunk.value, { stream: true });
-        var stripped = strip(buf);
-        if (stripped.length > emitted) {
-          target.insertAdjacentHTML('beforeend', stripped.slice(emitted));
-          emitted = stripped.length;
-        }
-      }
-      buf += decoder.decode();
-      var finalStripped = strip(buf);
-      if (finalStripped.length > emitted) {
-        target.insertAdjacentHTML('beforeend', finalStripped.slice(emitted));
-      }
-    } catch (e) {}
-  }
-  streamInto(${JSON.stringify(previewPath)}, 'rendre-preview');
-  streamInto(${JSON.stringify(mainPath)}, 'rendre-main');
-})();
-</script>
-</body>
-</html>`
+  res.end(
+    wrapperPageHtml({
+      preview: { src: `/gen/${id}:preview` },
+      main: { src: `/gen/${id}` }
+    })
+  )
 }
 
 export function getComposedUrl(id: string): string {
@@ -146,6 +93,7 @@ export function createSlot(id: string, onReady: () => void): void {
   slots.set(id, {
     rawBuffer: '',
     htmlOffset: null,
+    htmlEnd: null,
     lastSent: 0,
     res: null,
     done: false,
@@ -181,9 +129,20 @@ export function pushChunk(id: string, accumulated: string): void {
     }
   }
 
+  // Detect end of document once — keeps trailing ``` and other post-</html>
+  // tokens from bleeding into the iframe.
+  if (slot.htmlOffset !== null && slot.htmlEnd === null) {
+    const tail = accumulated.slice(slot.htmlOffset)
+    const m = tail.match(/<\/html\s*>/i)
+    if (m && m.index !== undefined) {
+      slot.htmlEnd = slot.htmlOffset + m.index + m[0].length
+    }
+  }
+
   // Push delta if connected
   if (slot.htmlOffset !== null && slot.res && !slot.closed) {
-    const available = accumulated.slice(slot.htmlOffset)
+    const end = slot.htmlEnd ?? accumulated.length
+    const available = accumulated.slice(slot.htmlOffset, end)
     const delta = available.slice(slot.lastSent)
     if (delta) {
       slot.res.write(delta)
