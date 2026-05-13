@@ -29,6 +29,11 @@ const api = {
     ipcRenderer.on('llm:url', handler)
     return () => ipcRenderer.off('llm:url', handler)
   },
+  onPreviewUrl: (cb: (id: string, url: string) => void): (() => void) => {
+    const handler = (_e: unknown, id: string, url: string) => cb(id, url)
+    ipcRenderer.on('llm:preview-url', handler)
+    return () => ipcRenderer.off('llm:preview-url', handler)
+  },
   onDone: (cb: (id: string, result: GenerateResponse) => void): (() => void) => {
     const handler = (_e: unknown, id: string, result: GenerateResponse) =>
       cb(id, result)

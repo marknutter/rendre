@@ -6,7 +6,6 @@ export interface Turn {
   createdAt: number
   prompt: string
   html: string
-  previewHtml?: string
   provider: ProviderId
   model: string
   usage?: UsageStats
@@ -42,7 +41,6 @@ export interface UsageStats {
 
 export interface GenerateResponse {
   html: string
-  previewHtml?: string
   usage?: UsageStats
 }
 

@@ -1,6 +1,5 @@
 import { createServer, type ServerResponse } from 'http'
 import type { AddressInfo } from 'net'
-import { wrapperPageHtml } from '../shared/wrapper'
 
 interface Slot {
   rawBuffer: string
@@ -19,12 +18,6 @@ let port = 0
 export function startStreamServer(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
-      const composedMatch = req.url?.match(/^\/composed\/([^/?]+)/)
-      if (composedMatch) {
-        const id = composedMatch[1]
-        serveComposed(id, res)
-        return
-      }
       const match = req.url?.match(/^\/gen\/([^/?]+)/)
       if (!match) {
         res.statusCode = 404
@@ -73,21 +66,6 @@ export function startStreamServer(): Promise<number> {
   })
 }
 
-function serveComposed(id: string, res: ServerResponse): void {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  res.setHeader('Cache-Control', 'no-store')
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.end(
-    wrapperPageHtml({
-      preview: { src: `/gen/${id}:preview` },
-      main: { src: `/gen/${id}` }
-    })
-  )
-}
-
-export function getComposedUrl(id: string): string {
-  return `http://127.0.0.1:${port}/composed/${id}`
-}
 
 export function createSlot(id: string, onReady: () => void): void {
   slots.set(id, {

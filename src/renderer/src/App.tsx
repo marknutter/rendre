@@ -7,7 +7,6 @@ import type {
   UsageStats
 } from '../../shared/types'
 import { DEFAULT_CONFIG } from '../../shared/types'
-import { wrapperPageHtml } from '../../shared/wrapper'
 import { Settings } from './Settings'
 import { skeletonHtml } from './skeleton'
 import './types'
@@ -22,9 +21,6 @@ function freshConversation(): Conversation {
 }
 
 function turnCanvas(turn: Turn): CanvasSrc {
-  if (turn.previewHtml) {
-    return { kind: 'composed', previewHtml: turn.previewHtml, mainHtml: turn.html }
-  }
   return { kind: 'turn', html: turn.html }
 }
 
@@ -32,15 +28,7 @@ type CanvasSrc =
   | { kind: 'skeleton'; html: string }
   | { kind: 'stream'; url: string }
   | { kind: 'turn'; html: string }
-  | { kind: 'composed'; previewHtml: string; mainHtml: string }
   | null
-
-function composedStaticHtml(previewHtml: string, mainHtml: string): string {
-  return wrapperPageHtml({
-    preview: { srcdoc: previewHtml },
-    main: { srcdoc: mainHtml }
-  })
-}
 
 export function App() {
   const [config, setConfig] = useState<ProviderConfig>(DEFAULT_CONFIG)
@@ -60,6 +48,8 @@ export function App() {
   const webviewReadyRef = useRef(false)
   const toolStatusRef = useRef<string | null>(null)
   const [toolStatus, setToolStatus] = useState<string | null>(null)
+  const [previewOverlayUrl, setPreviewOverlayUrl] = useState<string | null>(null)
+  const [overlayFading, setOverlayFading] = useState(false)
 
   // Carries the in-flight generation's metadata for the event handlers to use
   const generationRef = useRef<{
@@ -123,11 +113,7 @@ export function App() {
     } else if (canvasSrc.kind === 'stream') {
       wv.src = canvasSrc.url
     } else {
-      const html =
-        canvasSrc.kind === 'composed'
-          ? composedStaticHtml(canvasSrc.previewHtml, canvasSrc.mainHtml)
-          : canvasSrc.html
-      const blob = new Blob([html], { type: 'text/html' })
+      const blob = new Blob([canvasSrc.html], { type: 'text/html' })
       const url = URL.createObjectURL(blob)
       wv.src = url
       if (lastBlobUrlRef.current) URL.revokeObjectURL(lastBlobUrlRef.current)
@@ -159,6 +145,19 @@ export function App() {
       console.log('[rendre] onStreamUrl', { id, url })
       if (!generationRef.current || generationRef.current.id !== id) return
       setCanvasSrc({ kind: 'stream', url })
+      // Begin fading the overlay; remove after animation completes
+      setOverlayFading(true)
+      setTimeout(() => {
+        setPreviewOverlayUrl(null)
+        setOverlayFading(false)
+      }, 420)
+    })
+
+    const offPreviewUrl = window.rendre.onPreviewUrl((id, url) => {
+      console.log('[rendre] onPreviewUrl', { id, url })
+      if (!generationRef.current || generationRef.current.id !== id) return
+      setOverlayFading(false)
+      setPreviewOverlayUrl(url)
     })
 
     const offDone = window.rendre.onDone((id, result) => {
@@ -169,7 +168,6 @@ export function App() {
         createdAt: Date.now(),
         prompt: userPrompt,
         html: result.html,
-        previewHtml: result.previewHtml,
         provider: config.provider,
         model: config.model,
         usage: result.usage
@@ -222,6 +220,8 @@ export function App() {
       setGenerating(false)
       setGenId(null)
       setToolStatus(null)
+      setPreviewOverlayUrl(null)
+      setOverlayFading(false)
       generationRef.current = null
     })
 
@@ -240,6 +240,7 @@ export function App() {
 
     return () => {
       offUrl()
+      offPreviewUrl()
       offDone()
       offError()
       offTool()
@@ -267,6 +268,8 @@ export function App() {
     setPrompt('')
     setGenerating(true)
     setToolStatus(null)
+    setPreviewOverlayUrl(null)
+    setOverlayFading(false)
     setCanvasSrc({ kind: 'skeleton', html: skeletonHtml(userPrompt, config.provider) })
 
     try {
@@ -375,6 +378,18 @@ export function App() {
           ) : (
             // @ts-expect-error webview is an Electron-only element
             <webview ref={webviewRef as never} allowpopups="true" />
+          )}
+          {previewOverlayUrl && (
+            <div
+              className={`preview-overlay ${overlayFading ? 'fading' : ''}`}
+              aria-hidden="true"
+            >
+              <iframe
+                src={previewOverlayUrl}
+                title="preview"
+                sandbox="allow-same-origin allow-scripts"
+              />
+            </div>
           )}
         </div>
         {error && <div className="error-banner">{error}</div>}

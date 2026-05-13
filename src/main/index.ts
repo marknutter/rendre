@@ -12,7 +12,6 @@ import {
   startStreamServer,
   createSlot,
   getStreamUrl,
-  getComposedUrl,
   pushChunk,
   finishSlot,
   failSlot
@@ -102,20 +101,21 @@ app.whenReady().then(async () => {
       `[rendre] llm:start id=${id} provider=${req.provider} model=${req.model} hasPreview=${hasPreview}`
     )
 
-    let urlFired = false
-    const fireUrlOnce = (which: 'main' | 'preview') => {
-      if (urlFired) {
-        console.log(`[rendre] slot ${which} ready (already fired)`)
-        return
-      }
-      urlFired = true
-      const url = hasPreview ? getComposedUrl(id) : getStreamUrl(id)
-      console.log(`[rendre] llm:url sent (first ready=${which}) url=${url}`)
+    // Two separate ready signals: 'preview-url' shows the floating overlay above
+    // the skeleton, 'url' swaps the canvas to the main stream. Independent so the
+    // overlay can appear well before the main is ready.
+    createSlot(id, () => {
+      const url = getStreamUrl(id)
+      console.log(`[rendre] llm:url sent (main ready) url=${url}`)
       if (!sender.isDestroyed()) sender.send('llm:url', id, url)
+    })
+    if (hasPreview) {
+      createSlot(previewId, () => {
+        const url = getStreamUrl(previewId)
+        console.log(`[rendre] llm:preview-url sent url=${url}`)
+        if (!sender.isDestroyed()) sender.send('llm:preview-url', id, url)
+      })
     }
-
-    createSlot(id, () => fireUrlOnce('main'))
-    if (hasPreview) createSlot(previewId, () => fireUrlOnce('preview'))
 
     ;(async () => {
       const mainPromise = provider.generate(req, apiKey, {
@@ -154,12 +154,11 @@ app.whenReady().then(async () => {
         finishSlot(id)
         const mergedUsage = mergeUsage(result.usage, preview.usage)
         console.log(
-          `[rendre] llm:done id=${id} main=${result.html.length} chars preview=${preview.html.length} chars urlFired=${urlFired}`
+          `[rendre] llm:done id=${id} main=${result.html.length} chars preview=${preview.html.length} chars`
         )
         if (!sender.isDestroyed()) {
           sender.send('llm:done', id, {
             html: result.html,
-            previewHtml: preview.html || undefined,
             usage: mergedUsage
           })
         }
