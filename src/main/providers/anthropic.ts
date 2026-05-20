@@ -1,7 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { GenerateOptions, LLMProvider, ProviderResult } from './types'
+import type {
+  GenerateOptions,
+  LLMProvider,
+  ProviderResult,
+  SlotFillRequest,
+  SlotFillResult
+} from './types'
 import type { GenerateRequest } from '../../shared/types'
-import { SYSTEM_PROMPT } from '../../shared/prompt'
+import { ORCHESTRATOR_PROMPT, SLOT_FILL_PROMPT } from '../../shared/prompt'
 import { extractHtml } from './extract'
 import {
   FETCH_URL_TOOL,
@@ -15,6 +21,7 @@ const MAX_TOOL_CALLS = 5
 
 export const anthropicProvider: LLMProvider = {
   id: 'anthropic',
+
   async generate(
     req: GenerateRequest,
     apiKey: string,
@@ -52,7 +59,11 @@ export const anthropicProvider: LLMProvider = {
           model: req.model,
           max_tokens: 16000,
           system: [
-            { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }
+            {
+              type: 'text',
+              text: ORCHESTRATOR_PROMPT,
+              cache_control: { type: 'ephemeral' }
+            }
           ],
           tools: [FETCH_URL_TOOL],
           messages
@@ -60,7 +71,6 @@ export const anthropicProvider: LLMProvider = {
         { signal: opts.signal }
       )
 
-      // Per-iteration state for collecting tool_use blocks
       const pendingTools: Array<{ id: string; name: string; jsonBuf: string }> = []
       let currentToolIdx: number | null = null
 
@@ -101,10 +111,8 @@ export const anthropicProvider: LLMProvider = {
         break
       }
 
-      // Echo the assistant message exactly as received so the model sees its own tool_use blocks
       messages.push({ role: 'assistant', content: finalMsg.content })
 
-      // Execute tool calls and build tool_result blocks
       const toolResults: Anthropic.ToolResultBlockParam[] = []
       for (const t of pendingTools) {
         let input: unknown = {}
@@ -172,5 +180,89 @@ export const anthropicProvider: LLMProvider = {
         cacheCreationTokens: totalCacheCreation
       }
     }
+  },
+
+  async generateSlotFill(
+    req: SlotFillRequest,
+    apiKey: string,
+    opts: GenerateOptions = {}
+  ): Promise<SlotFillResult> {
+    const client = new Anthropic({ apiKey })
+
+    // Build a self-contained context: original conversation history (so the model
+    // knows what's been said), then the user's prompt + the orchestrator's skeleton
+    // as a cached prefix so multiple slot fills in the same turn hit the cache.
+    const messages: Anthropic.MessageParam[] = []
+    for (const turn of req.history) {
+      messages.push({ role: 'user', content: turn.prompt })
+      messages.push({ role: 'assistant', content: turn.html })
+    }
+    messages.push({ role: 'user', content: req.prompt })
+    messages.push({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: `Page skeleton for this turn:\n\n${req.skeleton}`,
+          cache_control: { type: 'ephemeral' }
+        }
+      ]
+    })
+    messages.push({
+      role: 'user',
+      content: `Fill the slot named "${req.slotName}". Hint: ${req.slotHint}\n\nOutput ONLY the inner HTML for this slot (no wrapping <section>, no <html>/<body>, no markdown).`
+    })
+
+    const stream = client.messages.stream(
+      {
+        model: req.model,
+        max_tokens: 8000,
+        system: [
+          {
+            type: 'text',
+            text: SLOT_FILL_PROMPT,
+            cache_control: { type: 'ephemeral' }
+          }
+        ],
+        messages
+      },
+      { signal: opts.signal }
+    )
+
+    let fullText = ''
+    for await (const event of stream) {
+      if (
+        event.type === 'content_block_delta' &&
+        event.delta.type === 'text_delta'
+      ) {
+        fullText += event.delta.text
+        opts.onChunk?.(fullText)
+      }
+    }
+
+    const finalMsg = await stream.finalMessage()
+    return {
+      html: stripSlotWrapper(fullText, req.slotName),
+      usage: {
+        inputTokens: finalMsg.usage.input_tokens,
+        outputTokens: finalMsg.usage.output_tokens,
+        cacheReadTokens: finalMsg.usage.cache_read_input_tokens ?? 0,
+        cacheCreationTokens: finalMsg.usage.cache_creation_input_tokens ?? 0
+      }
+    }
   }
+}
+
+// Defensive strip in case the model wraps its output in a <section data-slot> despite the prompt.
+function stripSlotWrapper(text: string, slotName: string): string {
+  const trimmed = text.trim()
+  const fence = trimmed.match(/```(?:html)?\s*\n?([\s\S]*?)```/i)
+  const body = fence ? fence[1].trim() : trimmed
+  const wrap = body.match(
+    new RegExp(
+      `^<section[^>]*data-slot=["']${slotName.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}["'][^>]*>([\\s\\S]*?)</section>\\s*$`,
+      'i'
+    )
+  )
+  return wrap ? wrap[1] : body
 }
