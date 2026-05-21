@@ -35,7 +35,35 @@ function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+// Concurrent fills per turn. Conservative cap to stay well inside Anthropic's
+// 50 RPM (paid tier) and avoid OpenAI rate-limit surprises on cheaper tiers.
+const FILL_CONCURRENCY = 4
+
 const activeGenerations = new Map<string, AbortController>()
+
+/**
+ * Run `task` over `items` with at most `limit` concurrent invocations. Per-item
+ * errors do not abort the others — the task is expected to handle its own
+ * errors and decide what visible effect (if any) to surface.
+ */
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  let cursor = 0
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (true) {
+        const i = cursor++
+        if (i >= items.length) return
+        await task(items[i], i)
+      }
+    }
+  )
+  await Promise.all(workers)
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -154,37 +182,55 @@ app.whenReady().then(async () => {
         // would still be delivered, but live delivery feels better.
         await waitForSse(id)
 
-        // --- Fill pass: one call per slot, sequential ---
-        let aggUsage: UsageStats | undefined = orchResult.usage
+        // --- Fill pass: bounded-concurrency parallel fills ---
+        // Cap concurrent fills so a high-slot-count turn doesn't blow past
+        // provider rate limits (Anthropic 50 RPM on paid tier handles 4 easily;
+        // OpenAI varies). Per-slot errors are isolated — one failure does not
+        // stop the others.
+        const aggUsageRef: { current: UsageStats | undefined } = { current: orchResult.usage }
         const fills = new Map<string, string>()
-        for (const slot of slots) {
-          if (ac.signal.aborted) break
+        await runWithConcurrency(slots, FILL_CONCURRENCY, async (slot) => {
+          if (ac.signal.aborted) return
           let lastSent = 0
-          const fillResult = await provider.generateSlotFill(
-            {
-              prompt: req.prompt,
-              history: req.history,
-              provider: req.provider,
-              model: req.model,
-              skeleton,
-              slotName: slot.name,
-              slotHint: slot.hint
-            },
-            apiKey,
-            {
-              signal: ac.signal,
-              onChunk: (accumulated) => {
-                const delta = accumulated.slice(lastSent)
-                if (!delta) return
-                lastSent = accumulated.length
-                sendSseEvent(id, 'slot-chunk', { slot: slot.name, chunk: delta })
+          try {
+            const fillResult = await provider.generateSlotFill(
+              {
+                prompt: req.prompt,
+                history: req.history,
+                provider: req.provider,
+                model: req.model,
+                skeleton,
+                slotName: slot.name,
+                slotHint: slot.hint
+              },
+              apiKey,
+              {
+                signal: ac.signal,
+                onChunk: (accumulated) => {
+                  const delta = accumulated.slice(lastSent)
+                  if (!delta) return
+                  lastSent = accumulated.length
+                  sendSseEvent(id, 'slot-chunk', {
+                    slot: slot.name,
+                    chunk: delta
+                  })
+                }
               }
-            }
-          )
-          fills.set(slot.name, fillResult.html)
-          sendSseEvent(id, 'slot-done', { slot: slot.name })
-          aggUsage = addUsage(aggUsage, fillResult.usage)
-        }
+            )
+            fills.set(slot.name, fillResult.html)
+            aggUsageRef.current = addUsage(aggUsageRef.current, fillResult.usage)
+          } catch (err) {
+            // Isolate this slot's failure — log, leave fills entry empty so
+            // the final HTML has a blank slot, do not propagate.
+            const msg = err instanceof Error ? err.message : String(err)
+            console.error(`[rendre] slot "${slot.name}" fill failed:`, msg)
+          } finally {
+            // Always emit slot-done so the page exits "filling" state even
+            // when a fill errored or was aborted.
+            sendSseEvent(id, 'slot-done', { slot: slot.name })
+          }
+        })
+        const aggUsage = aggUsageRef.current
 
         sendSseEvent(id, 'all-done', {})
         closeSseChannel(id)
