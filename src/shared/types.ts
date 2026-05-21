@@ -1,6 +1,22 @@
 export type ProviderId = 'anthropic' | 'openai'
 export type Theme = 'system' | 'light' | 'dark'
 
+/** Generic capability tiers used for per-slot model dispatch. */
+export type SlotModelAlias = 'haiku' | 'sonnet' | 'opus'
+export const SLOT_MODEL_ALIASES: readonly SlotModelAlias[] = ['haiku', 'sonnet', 'opus']
+/** Rank from cheapest/fastest to smartest. Used to enforce promote-only. */
+export const SLOT_MODEL_RANK: Record<SlotModelAlias, number> = {
+  haiku: 0,
+  sonnet: 1,
+  opus: 2
+}
+/** Canonical model id for each alias, per provider family. */
+export const ANTHROPIC_MODEL_BY_ALIAS: Record<SlotModelAlias, string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-7'
+}
+
 export interface Turn {
   id: string
   createdAt: number
@@ -23,6 +39,8 @@ export interface ProviderConfig {
   provider: ProviderId
   model: string
   theme: Theme
+  /** Allow the orchestrator to promote individual slots to a smarter model. */
+  useSlotDispatch: boolean
 }
 
 export interface GenerateRequest {
@@ -62,5 +80,6 @@ export const OPENAI_MODELS = ['gpt-5', 'gpt-5-mini', 'gpt-4o'] as const
 export const DEFAULT_CONFIG: ProviderConfig = {
   provider: 'anthropic',
   model: 'claude-sonnet-4-6',
-  theme: 'system'
+  theme: 'system',
+  useSlotDispatch: false
 }

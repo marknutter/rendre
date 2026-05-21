@@ -14,6 +14,7 @@ export function Settings({ config, onClose, onSaved }: Props) {
   const [apiKey, setApiKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [useSlotDispatch, setUseSlotDispatch] = useState(config.useSlotDispatch)
 
   const models = provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS
 
@@ -33,7 +34,7 @@ export function Settings({ config, onClose, onSaved }: Props) {
       if (apiKey.trim()) {
         await window.rendre.setKey(provider, apiKey.trim())
       }
-      const next: ProviderConfig = { ...config, provider, model }
+      const next: ProviderConfig = { ...config, provider, model, useSlotDispatch }
       await window.rendre.setConfig(next)
       onSaved(next)
     } finally {
@@ -73,6 +74,31 @@ export function Settings({ config, onClose, onSaved }: Props) {
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={provider === 'anthropic' ? 'sk-ant-…' : 'sk-…'}
           />
+        </div>
+
+        <div className="field">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={useSlotDispatch}
+              onChange={(e) => setUseSlotDispatch(e.target.checked)}
+              disabled={provider !== 'anthropic'}
+            />
+            <span>
+              Use faster models on simple slots (experimental)
+              {provider !== 'anthropic' && (
+                <span style={{ color: '#888', marginLeft: 6, fontSize: 12 }}>
+                  — Anthropic only for now
+                </span>
+              )}
+            </span>
+          </label>
+          <p style={{ color: '#888', fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+            When on, the orchestrator can promote individual sections of a response to a
+            smarter model than your default. Best paired with Haiku as the default — the
+            orchestrator handles routine sections with Haiku and escalates complex ones to
+            Sonnet/Opus. Quality on a per-slot basis is not yet validated.
+          </p>
         </div>
 
         <div className="modal-actions">
