@@ -44,6 +44,17 @@ function extractAttr(attrs: string, name: string): string | null {
 }
 
 /**
+ * Insert an additive region just before the closing </body> tag of the prior
+ * page's HTML. Falls back to appending at the end if no </body> tag is found
+ * (which shouldn't happen for well-formed orchestrator output but isn't fatal).
+ */
+export function mergeRegionIntoHtml(priorHtml: string, region: string): string {
+  const idx = priorHtml.toLowerCase().lastIndexOf('</body>')
+  if (idx === -1) return priorHtml + '\n' + region
+  return priorHtml.slice(0, idx) + region + '\n' + priorHtml.slice(idx)
+}
+
+/**
  * Replace the inner contents of each [data-slot="name"] element with the
  * supplied HTML. Used to build the final, fully-filled HTML stored as the
  * conversation turn (so reload/scroll-back doesn't re-stream).

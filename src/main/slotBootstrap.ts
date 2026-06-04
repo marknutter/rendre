@@ -1,36 +1,69 @@
 /**
  * Generates the inline <script> + <style> block appended to the orchestrator's
- * HTML output. It opens an EventSource on /stream/:id/events, routes
- * `slot-chunk` deltas into the matching [data-slot] element by re-parsing the
- * accumulated buffer for that slot (avoids the partial-tag accumulation
- * problems of incremental insertAdjacentHTML calls), and applies CSS state
- * classes for the empty / filling / filled lifecycle.
+ * HTML output. The script:
+ * - Opens an EventSource on the supplied stream id and routes events:
+ *     * `append-region` → appends a new HTML region just before </body>
+ *     * `slot-chunk`    → routes deltas to [data-slot="..."] elements
+ *     * `slot-done`     → flips the slot's lifecycle class
+ *     * `all-done`      → closes the EventSource
+ * - Exposes the same routing function on `window.__rendreAttach(streamId)` so
+ *   the renderer can re-attach for additive turns (each additive turn opens a
+ *   new EventSource against a new stream id without navigating the iframe).
  */
-export function slotBootstrap(streamId: string): string {
+export function slotBootstrap(streamId: string, baseUrl: string): string {
   const safeId = streamId.replace(/[^a-zA-Z0-9_-]/g, '')
+  const safeBase = baseUrl.replace(/['"\\]/g, '')
   const script = `
 (function(){
-  if (window.__rendreSlotsInit) return;
-  window.__rendreSlotsInit = true;
+  if (window.__rendreAttach) {
+    // Bootstrap already installed by a prior turn — just attach to the new stream.
+    window.__rendreAttach('${safeId}');
+    return;
+  }
+  var RENDRE_BASE_URL = '${safeBase}';
 
   var slotBuffers = Object.create(null);
+
+  function cssEscape(s) {
+    return String(s).replace(/["\\\\]/g, '\\\\$&');
+  }
 
   function applySlot(slotName, buffer) {
     var el = document.querySelector('[data-slot="' + cssEscape(slotName) + '"]');
     if (!el) return;
     el.classList.add('rendre-filling');
     // Replace children + parse the full accumulated buffer each chunk.
-    // Re-parsing on every chunk is wasteful for huge slots, but it's correct
-    // (partial tags never linger as broken trees) and the prototype can absorb
-    // the cost. Optimize later by debouncing if needed.
+    // Re-parsing on every chunk avoids the partial-tag accumulation problems
+    // of incremental insertAdjacentHTML calls.
     el.replaceChildren();
     el.insertAdjacentHTML('beforeend', buffer);
   }
 
-  function attach() {
+  function appendRegion(html) {
+    if (typeof html !== 'string' || !html) return;
+    // Append just before </body> so subsequent regions stack in arrival order
+    // below the existing content.
+    var anchor = document.body;
+    if (!anchor) return;
+    var template = document.createElement('template');
+    template.innerHTML = html;
+    anchor.appendChild(template.content);
+  }
+
+  function attach(id, opts) {
+    // Absolute URL — works whether the iframe was loaded from the stream
+    // server (first-pass) or a blob (post-onDone, additive turns).
+    var baseUrl = (opts && opts.baseUrl) || RENDRE_BASE_URL;
     var es;
-    try { es = new EventSource('/stream/${safeId}/events'); }
+    try { es = new EventSource(baseUrl + '/stream/' + id + '/events'); }
     catch (e) { console.error('rendre: EventSource failed', e); return; }
+
+    es.addEventListener('append-region', function (e) {
+      try {
+        var msg = JSON.parse(e.data);
+        appendRegion(msg && msg.html);
+      } catch (err) { console.error('rendre append-region error', err); }
+    });
 
     es.addEventListener('slot-chunk', function (e) {
       try {
@@ -55,14 +88,12 @@ export function slotBootstrap(streamId: string): string {
     es.addEventListener('error', function () { /* will auto-reconnect */ });
   }
 
-  function cssEscape(s) {
-    return String(s).replace(/["\\\\]/g, '\\\\$&');
-  }
+  window.__rendreAttach = attach;
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', attach);
+    document.addEventListener('DOMContentLoaded', function () { attach('${safeId}'); });
   } else {
-    attach();
+    attach('${safeId}');
   }
 })();
 `.trim()

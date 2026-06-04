@@ -140,7 +140,11 @@ export function createSlot(id: string, onReady: () => void): void {
 }
 
 export function getStreamUrl(id: string): string {
-  return `http://127.0.0.1:${port}/stream/${id}`
+  return `${getBaseUrl()}/stream/${id}`
+}
+
+export function getBaseUrl(): string {
+  return `http://127.0.0.1:${port}`
 }
 
 export function pushChunk(id: string, accumulated: string): void {
