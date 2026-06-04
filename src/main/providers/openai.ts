@@ -7,8 +7,12 @@ import type {
   SlotFillResult
 } from './types'
 import type { GenerateRequest } from '../../shared/types'
-import { ORCHESTRATOR_PROMPT, SLOT_FILL_PROMPT } from '../../shared/prompt'
-import { extractHtml } from './extract'
+import {
+  ADDITIVE_ORCHESTRATOR_PROMPT,
+  ORCHESTRATOR_PROMPT,
+  SLOT_FILL_PROMPT
+} from '../../shared/prompt'
+import { extractHtml, extractRegion } from './extract'
 
 export const openaiProvider: LLMProvider = {
   id: 'openai',
@@ -20,8 +24,12 @@ export const openaiProvider: LLMProvider = {
   ): Promise<ProviderResult> {
     const client = new OpenAI({ apiKey })
 
+    const systemPrompt =
+      req.isAdditive && req.history.length > 0
+        ? ADDITIVE_ORCHESTRATOR_PROMPT
+        : ORCHESTRATOR_PROMPT
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: ORCHESTRATOR_PROMPT }
+      { role: 'system', content: systemPrompt }
     ]
     for (const turn of req.history) {
       messages.push({ role: 'user', content: turn.prompt })
@@ -52,7 +60,10 @@ export const openaiProvider: LLMProvider = {
     }
 
     return {
-      html: extractHtml(fullText),
+      html:
+        req.isAdditive && req.history.length > 0
+          ? extractRegion(fullText)
+          : extractHtml(fullText),
       usage: usage
         ? {
             inputTokens: usage.prompt_tokens,

@@ -33,6 +33,12 @@ export interface Conversation {
   updatedAt: number
   title: string
   turns: Turn[]
+  /**
+   * Sticky preference: when true, subsequent prompts in this conversation
+   * extend the current page (append a new region) instead of replacing it.
+   * The `/add` prefix overrides this per-prompt without flipping state.
+   */
+  additiveMode?: boolean
 }
 
 export interface ProviderConfig {
@@ -48,6 +54,12 @@ export interface GenerateRequest {
   history: Turn[]
   provider: ProviderId
   model: string
+  /**
+   * When true, the orchestrator emits only a new region to append to the prior
+   * turn's page (rather than designing a fresh page). Requires a non-empty
+   * history; falls back to a fresh turn on the first prompt of a conversation.
+   */
+  isAdditive?: boolean
 }
 
 export interface UsageStats {

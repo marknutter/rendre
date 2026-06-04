@@ -12,6 +12,7 @@ import {
   startStreamServer,
   createSlot,
   getStreamUrl,
+  getBaseUrl,
   pushChunk,
   appendAndFinish,
   failSlot,
@@ -20,7 +21,7 @@ import {
   cleanupSlot
 } from './streamServer'
 import { slotBootstrap } from './slotBootstrap'
-import { parseSlots, fillSlotsInHtml } from './slotParser'
+import { parseSlots, fillSlotsInHtml, mergeRegionIntoHtml } from './slotParser'
 import type { SlotDef } from './slotParser'
 import { resolveSlotModel } from './slotModelResolver'
 import { DynamicPool } from './dynamicPool'
@@ -120,10 +121,12 @@ app.whenReady().then(async () => {
       if (!sender.isDestroyed()) sender.send('llm:url', id, getStreamUrl(id))
     })
 
+    // Additive turns extend the prior turn's page instead of replacing it.
+    // Requires a non-empty history; first prompts in a conversation always
+    // run as fresh turns even if the flag is set.
+    const additive = req.isAdditive === true && req.history.length > 0
+
     ;(async () => {
-      // Per-turn shared state. The pool, the fills map, and the aggregate
-      // usage are all populated incrementally as the orchestrator's stream
-      // arrives and fills complete.
       const pool = new DynamicPool(FILL_CONCURRENCY)
       const seenSlots = new Set<string>()
       const fills = new Map<string, string>()
@@ -167,35 +170,78 @@ app.whenReady().then(async () => {
             fills.set(slot.name, fillResult.html)
             aggUsageRef.current = addUsage(aggUsageRef.current, fillResult.usage)
           } catch (err) {
-            // Isolate this slot's failure — log, leave fills entry empty so
-            // the final HTML has a blank slot, do not propagate.
             const msg = err instanceof Error ? err.message : String(err)
             console.error(`[rendre] slot "${slot.name}" fill failed:`, msg)
           } finally {
-            // Always emit slot-done so the page exits "filling" state even
-            // when a fill errored or was aborted.
             sendSseEvent(id, 'slot-done', { slot: slot.name })
           }
         })
       }
 
       try {
-        // --- Orchestrator pass: stream the skeleton AND dispatch fills as
-        // each slot is declared. The serial orchestrator → fills boundary is
-        // collapsed: fills start as soon as their <section data-slot=...> tag
-        // is fully parsed, while the orchestrator keeps streaming the rest of
-        // the skeleton. Each fill captures a snapshot of the partial skeleton
-        // at dispatch time as its context.
         const orchReq: GenerateRequest = {
           ...req,
+          isAdditive: additive,
           model: ORCHESTRATOR_MODEL_BY_PROVIDER[req.provider]
         }
+
+        if (additive) {
+          // --- Additive path: orchestrator emits a <aside data-slot-region>
+          // fragment that gets appended to the prior page via SSE. No HTTP
+          // stream consumer (the iframe stays on its current document and
+          // reuses the prior turn's bootstrap script via __rendreAttach).
+          const orchResult = await provider.generate(orchReq, apiKey, {
+            signal: ac.signal,
+            // No onChunk wiring to streamServer — the HTTP stream isn't
+            // navigated to for additive turns.
+            onTool: (event) => {
+              if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
+            }
+          })
+          aggUsageRef.current = addUsage(aggUsageRef.current, orchResult.usage)
+
+          const region = orchResult.html
+          const slots = parseSlots(region)
+
+          // Tell the page to inject the new region. After this event lands the
+          // [data-slot] elements inside the region exist in the DOM, so the
+          // subsequent slot-chunk events can route into them.
+          sendSseEvent(id, 'append-region', { html: region })
+
+          if (slots.length > 0) {
+            for (const slot of slots) {
+              seenSlots.add(slot.name)
+              dispatchSlot(slot, region)
+            }
+            await pool.close()
+          }
+
+          sendSseEvent(id, 'all-done', {})
+          closeSseChannel(id)
+
+          // Final stored HTML: prior page with the (filled) region appended.
+          const filledRegion =
+            slots.length > 0 ? fillSlotsInHtml(region, fills) : region
+          const priorHtml = req.history[req.history.length - 1].html
+          const finalHtml = mergeRegionIntoHtml(priorHtml, filledRegion)
+          if (!sender.isDestroyed()) {
+            sender.send('llm:done', id, {
+              html: finalHtml,
+              usage: aggUsageRef.current
+            })
+          }
+          cleanupSlot(id)
+          activeGenerations.delete(id)
+          return
+        }
+
+        // --- Fresh-turn path: orchestrator streams a full HTML page, the
+        // iframe navigates to /stream/:id, fills stream-fire as each slot
+        // declaration appears in the orchestrator's output.
         const orchResult = await provider.generate(orchReq, apiKey, {
           signal: ac.signal,
           onChunk: (text) => {
             pushChunk(id, text)
-            // Re-scan the accumulated buffer for new slot declarations. We
-            // re-scan every chunk; the regex is fast, buffers are small.
             const declared = parseSlots(text)
             for (const slot of declared) {
               if (seenSlots.has(slot.name)) continue
@@ -210,18 +256,10 @@ app.whenReady().then(async () => {
 
         aggUsageRef.current = addUsage(aggUsageRef.current, orchResult.usage)
 
-        // Canonical skeleton — used for final HTML assembly. If the model
-        // wrapped its output in fences or had other noise, extractHtml cleans
-        // it up; slot detection above ran on the raw stream so dispatch order
-        // is preserved.
         const skeleton = orchResult.html
 
-        // Inject the SSE bootstrap and close the HTTP stream. The browser's
-        // EventSource may not be connected yet — fills' early events queue in
-        // streamServer and flush on connection.
-        appendAndFinish(id, slotBootstrap(id))
+        appendAndFinish(id, slotBootstrap(id, getBaseUrl()))
 
-        // No slots → orchestrator's output is the whole answer.
         if (seenSlots.size === 0) {
           sendSseEvent(id, 'all-done', {})
           closeSseChannel(id)
@@ -236,7 +274,6 @@ app.whenReady().then(async () => {
           return
         }
 
-        // Wait for every dispatched fill to finish (succeed or fail).
         await pool.close()
 
         sendSseEvent(id, 'all-done', {})
@@ -252,8 +289,6 @@ app.whenReady().then(async () => {
         cleanupSlot(id)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        // Drain in-flight fills before reporting the error to avoid leaking
-        // workers. Their internal try/catch swallows AbortError.
         await pool.close().catch(() => undefined)
         failSlot(id)
         if (!sender.isDestroyed()) sender.send('llm:error', id, msg)

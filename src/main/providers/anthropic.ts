@@ -7,8 +7,12 @@ import type {
   SlotFillResult
 } from './types'
 import type { GenerateRequest } from '../../shared/types'
-import { ORCHESTRATOR_PROMPT, SLOT_FILL_PROMPT } from '../../shared/prompt'
-import { extractHtml } from './extract'
+import {
+  ADDITIVE_ORCHESTRATOR_PROMPT,
+  ORCHESTRATOR_PROMPT,
+  SLOT_FILL_PROMPT
+} from '../../shared/prompt'
+import { extractHtml, extractRegion } from './extract'
 import {
   FETCH_URL_TOOL,
   fetchUrl,
@@ -53,6 +57,11 @@ export const anthropicProvider: LLMProvider = {
     let totalCacheCreation = 0
     let toolCallsMade = 0
 
+    const systemPrompt =
+      req.isAdditive && req.history.length > 0
+        ? ADDITIVE_ORCHESTRATOR_PROMPT
+        : ORCHESTRATOR_PROMPT
+
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
       const stream = client.messages.stream(
         {
@@ -61,7 +70,7 @@ export const anthropicProvider: LLMProvider = {
           system: [
             {
               type: 'text',
-              text: ORCHESTRATOR_PROMPT,
+              text: systemPrompt,
               cache_control: { type: 'ephemeral' }
             }
           ],
@@ -172,7 +181,10 @@ export const anthropicProvider: LLMProvider = {
     }
 
     return {
-      html: extractHtml(fullText),
+      html:
+        req.isAdditive && req.history.length > 0
+          ? extractRegion(fullText)
+          : extractHtml(fullText),
       usage: {
         inputTokens: totalInput,
         outputTokens: totalOutput,

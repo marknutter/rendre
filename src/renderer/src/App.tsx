@@ -50,6 +50,7 @@ export function App() {
     id: string
     conv: Conversation
     prompt: string
+    isAdditive: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -172,10 +173,15 @@ export function App() {
       })
       setActiveTurnId(turn.id)
       if (result.usage) setLastUsage(result.usage)
-      // Important: leave canvasSrc alone if we already navigated to a stream URL,
-      // so the user keeps their scroll position. If the stream never started
-      // (e.g. model returned plain text), fall back to the extracted HTML.
+      // For additive turns the iframe is already showing the merged page
+      // (region appended live via SSE); reload it from the canonical merged
+      // HTML so the canvas state matches what's persisted. Brief flash but
+      // the state stays consistent across theme changes / navigation.
+      // For fresh-stream turns: keep the stream URL to preserve scroll
+      // position; for plain-text fallbacks: swap to the extracted HTML.
+      const wasAdditive = generationRef.current?.isAdditive === true
       setCanvasSrc((prev) => {
+        if (wasAdditive) return { kind: 'turn', html: result.html }
         if (prev?.kind === 'stream') return prev
         return { kind: 'turn', html: result.html }
       })
@@ -237,26 +243,64 @@ export function App() {
       await persistConversations([conv, ...conversations])
     }
 
-    const userPrompt = prompt
+    // Parse `/add ` prefix as a one-shot additive override (doesn't flip the
+    // sticky toggle). Sticky `conv.additiveMode` also counts. Either way, an
+    // additive turn requires at least one prior turn to extend.
+    let userPrompt = prompt
+    let oneShotAdditive = false
+    if (/^\/add\s+/.test(userPrompt)) {
+      oneShotAdditive = true
+      userPrompt = userPrompt.replace(/^\/add\s+/, '')
+    }
+    const isAdditive =
+      (conv.additiveMode === true || oneShotAdditive) && conv.turns.length > 0
+
     setPrompt('')
     setGenerating(true)
     setToolStatus(null)
-    setCanvasSrc({ kind: 'skeleton', html: skeletonHtml(userPrompt, config.provider) })
+    // Additive turns keep the existing iframe content in place — the new
+    // region is appended into it live via SSE. Don't show the skeleton.
+    if (!isAdditive) {
+      setCanvasSrc({ kind: 'skeleton', html: skeletonHtml(userPrompt, config.provider) })
+    }
 
     try {
       const id = await window.rendre.startGenerate({
         prompt: userPrompt,
         history: conv.turns,
         provider: config.provider,
-        model: config.model
+        model: config.model,
+        isAdditive
       })
-      generationRef.current = { id, conv, prompt: userPrompt }
+      generationRef.current = { id, conv, prompt: userPrompt, isAdditive }
       setGenId(id)
+
+      if (isAdditive) {
+        // Tell the iframe (which is still showing the prior turn's page,
+        // bootstrap script intact) to open an EventSource on the new stream
+        // so it receives the append-region + slot-chunk events.
+        const wv = webviewRef.current as unknown as {
+          executeJavaScript?: (code: string) => Promise<unknown>
+        } | null
+        void wv?.executeJavaScript?.(
+          `window.__rendreAttach && window.__rendreAttach(${JSON.stringify(id)})`
+        )
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setGenerating(false)
-      setCanvasSrc(null)
+      if (!isAdditive) setCanvasSrc(null)
     }
+  }
+
+  function toggleAdditiveMode() {
+    if (!activeConv) return
+    const next = activeConv.additiveMode === true ? false : true
+    const updatedConv: Conversation = { ...activeConv, additiveMode: next }
+    const updated = conversations.map((c) =>
+      c.id === activeConv.id ? updatedConv : c
+    )
+    void persistConversations(updated)
   }
 
   function cancelGeneration() {
@@ -290,6 +334,9 @@ export function App() {
 
   const turnsForSidebar = activeConv?.turns ?? []
   const showEmpty = canvasSrc === null
+  const additiveMode = activeConv?.additiveMode === true
+  const canExtend = (activeConv?.turns.length ?? 0) > 0
+  const extendActive = additiveMode || /^\/add\s+/.test(prompt)
 
   return (
     <div className="app">
@@ -355,7 +402,11 @@ export function App() {
         <div className="input-bar">
           <textarea
             className="input"
-            placeholder="Ask anything — the answer will be a webpage."
+            placeholder={
+              extendActive && canExtend
+                ? 'Extend the page — your response will be appended.'
+                : 'Ask anything — the answer will be a webpage.'
+            }
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
@@ -366,11 +417,35 @@ export function App() {
             }}
             rows={2}
           />
+          <button
+            className="icon-btn"
+            onClick={toggleAdditiveMode}
+            disabled={!canExtend || generating}
+            title={
+              !canExtend
+                ? 'Send a first prompt before you can extend the page'
+                : additiveMode
+                  ? 'Extend mode is ON — your next prompts append to the page (click to turn off)'
+                  : 'Extend mode is OFF — click to make follow-ups append to the page'
+            }
+            style={{
+              padding: '0 12px',
+              alignSelf: 'stretch',
+              opacity: !canExtend ? 0.4 : 1,
+              background: extendActive && canExtend ? 'var(--accent, #7c5cff)' : undefined,
+              color: extendActive && canExtend ? '#fff' : undefined,
+              borderColor: extendActive && canExtend ? 'transparent' : undefined,
+              fontSize: 12,
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {extendActive && canExtend ? '＋ Extend' : '＋'}
+          </button>
           {generating ? (
             <button className="send cancel" onClick={cancelGeneration}>Stop</button>
           ) : (
             <button className="send" onClick={() => void sendPrompt()} disabled={!prompt.trim()}>
-              Send
+              {extendActive && canExtend ? 'Extend' : 'Send'}
             </button>
           )}
         </div>
