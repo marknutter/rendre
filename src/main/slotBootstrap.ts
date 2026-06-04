@@ -65,6 +65,19 @@ export function slotBootstrap(streamId: string, baseUrl: string): string {
       } catch (err) { console.error('rendre append-region error', err); }
     });
 
+    es.addEventListener('slot-reset', function (e) {
+      try {
+        var msg = JSON.parse(e.data);
+        if (!msg || !msg.slot) return;
+        slotBuffers[msg.slot] = '';
+        var el = document.querySelector('[data-slot="' + cssEscape(msg.slot) + '"]');
+        if (!el) return;
+        el.replaceChildren();
+        el.classList.remove('rendre-filled');
+        el.classList.add('rendre-filling');
+      } catch (err) { console.error('rendre slot-reset error', err); }
+    });
+
     es.addEventListener('slot-chunk', function (e) {
       try {
         var msg = JSON.parse(e.data);
@@ -89,6 +102,26 @@ export function slotBootstrap(streamId: string, baseUrl: string): string {
   }
 
   window.__rendreAttach = attach;
+
+  // Iterate-button click delegation. The user clicks a <button
+  // data-rendre-iterate="<instruction>"> embedded in slot content; we find the
+  // enclosing slot, then post the (slot, instruction, shiftKey) tuple to the
+  // host via a magic-prefixed console.log. The host (App.tsx) listens via the
+  // webview's console-message event.
+  document.addEventListener('click', function (e) {
+    var target = e.target;
+    if (!target || target.nodeType !== 1) return;
+    var btn = target.closest('[data-rendre-iterate]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var slotEl = btn.closest('[data-slot]');
+    var slot = slotEl ? slotEl.getAttribute('data-slot') : null;
+    var instruction = btn.getAttribute('data-rendre-iterate') || '';
+    if (!slot || !instruction) return;
+    var payload = JSON.stringify({ slot: slot, instruction: instruction, shiftKey: !!e.shiftKey });
+    console.log('__rendre_iterate__:' + payload);
+  });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { attach('${safeId}'); });
@@ -123,6 +156,37 @@ export function slotBootstrap(streamId: string, baseUrl: string): string {
 [data-slot]:not(:empty):not(.rendre-filling) {
   animation: none !important;
   background: none !important;
+}
+
+/* Default styling for iterate buttons; the slot fill may override with inline
+   styles if its design demands it. Pill chips that read as clickable without
+   dominating the slot's content. */
+button[data-rendre-iterate] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  background: rgba(127,127,127,0.10);
+  color: inherit;
+  border: 1px solid rgba(127,127,127,0.25);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+  user-select: none;
+}
+button[data-rendre-iterate]:hover {
+  background: rgba(127,127,127,0.20);
+}
+button[data-rendre-iterate]:active {
+  background: rgba(127,127,127,0.30);
+  transform: scale(0.97);
+}
+button[data-rendre-iterate]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 `.trim()
 

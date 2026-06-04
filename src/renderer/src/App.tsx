@@ -51,6 +51,7 @@ export function App() {
     conv: Conversation
     prompt: string
     isAdditive: boolean
+    isIterate: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -173,15 +174,17 @@ export function App() {
       })
       setActiveTurnId(turn.id)
       if (result.usage) setLastUsage(result.usage)
-      // For additive turns the iframe is already showing the merged page
-      // (region appended live via SSE); reload it from the canonical merged
-      // HTML so the canvas state matches what's persisted. Brief flash but
-      // the state stays consistent across theme changes / navigation.
-      // For fresh-stream turns: keep the stream URL to preserve scroll
-      // position; for plain-text fallbacks: swap to the extracted HTML.
-      const wasAdditive = generationRef.current?.isAdditive === true
+      // For additive AND iterate turns the iframe is already showing the
+      // updated page (region appended or slot refilled, live via SSE);
+      // reload it from the canonical merged HTML so the canvas state matches
+      // what's persisted. Brief flash but the state stays consistent across
+      // theme changes / navigation. For fresh-stream turns: keep the stream
+      // URL to preserve scroll position.
+      const wasInPlace =
+        generationRef.current?.isAdditive === true ||
+        generationRef.current?.isIterate === true
       setCanvasSrc((prev) => {
-        if (wasAdditive) return { kind: 'turn', html: result.html }
+        if (wasInPlace) return { kind: 'turn', html: result.html }
         if (prev?.kind === 'stream') return prev
         return { kind: 'turn', html: result.html }
       })
@@ -225,6 +228,52 @@ export function App() {
       offTool()
     }
   }, [config.provider, config.model])
+
+  // Webview console-message listener: the bootstrap script inside the iframe
+  // dispatches iterate-button clicks by emitting a magic-prefixed console.log
+  // (no preload needed). We parse it and route to the iterate handler.
+  useEffect(() => {
+    const wv = webviewRef.current as unknown as {
+      addEventListener?: (
+        event: string,
+        cb: (e: { message: string }) => void
+      ) => void
+      removeEventListener?: (
+        event: string,
+        cb: (e: { message: string }) => void
+      ) => void
+    } | null
+    if (!wv?.addEventListener) return
+    const handler = (e: { message: string }) => {
+      if (typeof e.message !== 'string') return
+      if (!e.message.startsWith('__rendre_iterate__:')) return
+      let payload: { slot?: string; instruction?: string; shiftKey?: boolean }
+      try {
+        payload = JSON.parse(e.message.slice('__rendre_iterate__:'.length))
+      } catch {
+        return
+      }
+      if (!payload.slot || !payload.instruction) return
+      void handleIterateClick(
+        payload.slot,
+        payload.instruction,
+        payload.shiftKey === true
+      )
+    }
+    wv.addEventListener('console-message', handler)
+    return () => wv.removeEventListener?.('console-message', handler)
+    // canvasSrc?.kind is in deps so the listener re-attaches when the webview
+    // mounts after being unmounted (showEmpty path). State captured in the
+    // handler closure stays fresh through these deps.
+  }, [
+    canvasSrc?.kind,
+    activeConvId,
+    activeTurnId,
+    config.provider,
+    config.model,
+    generating,
+    conversations
+  ])
 
   async function persistConversations(next: Conversation[]) {
     setConversations(next)
@@ -272,7 +321,7 @@ export function App() {
         model: config.model,
         isAdditive
       })
-      generationRef.current = { id, conv, prompt: userPrompt, isAdditive }
+      generationRef.current = { id, conv, prompt: userPrompt, isAdditive, isIterate: false }
       setGenId(id)
 
       if (isAdditive) {
@@ -301,6 +350,56 @@ export function App() {
       c.id === activeConv.id ? updatedConv : c
     )
     void persistConversations(updated)
+  }
+
+  async function handleIterateClick(
+    slot: string,
+    instruction: string,
+    shiftKey: boolean
+  ) {
+    if (generating) return
+    if (shiftKey) {
+      setPrompt(instruction)
+      return
+    }
+    if (!activeConvId || !activeTurnId) return
+    const conv = conversations.find((c) => c.id === activeConvId)
+    if (!conv) return
+
+    setError(null)
+    setGenerating(true)
+    setToolStatus(null)
+    try {
+      const id = await window.rendre.iterateSlot({
+        convId: activeConvId,
+        turnId: activeTurnId,
+        slot,
+        instruction,
+        provider: config.provider,
+        model: config.model
+      })
+      generationRef.current = {
+        id,
+        conv,
+        prompt: instruction,
+        isAdditive: false,
+        isIterate: true
+      }
+      setGenId(id)
+
+      // Tell the iframe to attach to the new stream — iteration doesn't
+      // navigate the iframe (the rest of the page stays put while the one
+      // slot refills in place).
+      const wv = webviewRef.current as unknown as {
+        executeJavaScript?: (code: string) => Promise<unknown>
+      } | null
+      void wv?.executeJavaScript?.(
+        `window.__rendreAttach && window.__rendreAttach(${JSON.stringify(id)})`
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setGenerating(false)
+    }
   }
 
   function cancelGeneration() {

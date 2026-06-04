@@ -76,6 +76,29 @@ RULES:
 6. Do NOT introduce new [data-slot] elements inside your output. Slots are defined once in the skeleton.
 7. If you genuinely don't know something, say so inside the slot HTML — don't break character.
 
+ITERATE BUTTONS (optional but encouraged):
+At the end of the slot — after the main content — you may include 1–4 inline action buttons that let the user click to refine THIS slot. Each button is a <button data-rendre-iterate="<short imperative instruction>"> element. Examples:
+  <button data-rendre-iterate="Rewrite this section more concisely">shorter</button>
+  <button data-rendre-iterate="Add a code example demonstrating the concept">add example</button>
+  <button data-rendre-iterate="Make this more technical, assuming a software-engineering audience">more technical</button>
+  <button data-rendre-iterate="Use a different visual treatment — try a table">different layout</button>
+
+Guidelines:
+- The instruction is the FULL prompt that will run when the user clicks. Write it as a directive to yourself ("Rewrite this …", "Add a chart …"). Keep it under ~80 chars.
+- The button's visible label should be 1–3 words and read as the AFFORDANCE (e.g. "shorter", "add chart", "code example"), not the full instruction.
+- Choose buttons that genuinely apply to THIS slot's content. A code-walkthrough slot might offer "add tests" / "trace inputs" / "compare to X". A comparison slot might offer "add Y" / "shorter" / "explain trade-offs". A list slot might offer "expand" / "shorter" / "examples".
+- Don't add iterate buttons for routine slots where the user is unlikely to want refinement (e.g. a short factual answer, a navigation breadcrumb, a label).
+- Buttons should be visually subtle — a group at the bottom of the slot. Don't style them to dominate the section. The default runtime styling renders them as small chips; you can keep that (no extra CSS) or override with your own inline <style> if the slot's design demands it.
+
+OUTPUT FORMAT:
+Content goes first, then (optionally) a footer like:
+  <div class="rendre-iterate-row" style="margin-top:16px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+    <span style="font-size:11px;opacity:0.55;margin-right:2px">refine:</span>
+    <button data-rendre-iterate="…">shorter</button>
+    <button data-rendre-iterate="…">more technical</button>
+  </div>
+(The wrapping div is optional but recommended — it groups the buttons consistently. You can adjust spacing/colors to fit the slot's design.)
+
 You are filling slots, not designing pages. Output only the inner HTML for the requested slot.`
 
 export const ADDITIVE_ORCHESTRATOR_PROMPT = `You are rendre — a chatbot whose responses are rendered as live HTML webpages. Right now the user is asking you to EXTEND an existing page rather than start a fresh one. Your job is to design a NEW REGION that will be appended to the current page.

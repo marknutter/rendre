@@ -21,13 +21,19 @@ import {
   cleanupSlot
 } from './streamServer'
 import { slotBootstrap } from './slotBootstrap'
-import { parseSlots, fillSlotsInHtml, mergeRegionIntoHtml } from './slotParser'
+import {
+  parseSlots,
+  fillSlotsInHtml,
+  mergeRegionIntoHtml,
+  getSlotInfo
+} from './slotParser'
 import type { SlotDef } from './slotParser'
 import { resolveSlotModel } from './slotModelResolver'
 import { DynamicPool } from './dynamicPool'
 import type {
   Conversation,
   GenerateRequest,
+  IterateSlotRequest,
   ProviderConfig,
   ProviderId,
   UsageStats
@@ -303,6 +309,119 @@ app.whenReady().then(async () => {
   ipcMain.handle('llm:cancel', (_e, id: string) => {
     const ac = activeGenerations.get(id)
     if (ac) ac.abort()
+  })
+
+  ipcMain.handle('llm:iterate-slot', async (e, req: IterateSlotRequest) => {
+    const id = uid()
+    const ac = new AbortController()
+    activeGenerations.set(id, ac)
+
+    const apiKey = await getKey(req.provider)
+    if (!apiKey) {
+      activeGenerations.delete(id)
+      throw new Error(`No API key set for ${req.provider}`)
+    }
+
+    const conversations = await loadConversations()
+    const conv = conversations.find((c) => c.id === req.convId)
+    const priorTurn = conv?.turns.find((t) => t.id === req.turnId)
+    if (!conv || !priorTurn) {
+      activeGenerations.delete(id)
+      throw new Error('Prior turn not found')
+    }
+
+    const slotInfo = getSlotInfo(priorTurn.html, req.slot)
+    if (!slotInfo) {
+      activeGenerations.delete(id)
+      throw new Error(`Slot "${req.slot}" not found in prior turn`)
+    }
+
+    const turnCfg = await loadConfig()
+    const dispatchEnabled = turnCfg.useSlotDispatch === true
+    const provider = getProvider(req.provider)
+    const sender = e.sender
+
+    // SSE-only slot — no HTTP stream consumer because the iframe doesn't
+    // navigate for iteration (renderer calls __rendreAttach with the new id).
+    createSlot(id, () => {})
+
+    ;(async () => {
+      try {
+        sendSseEvent(id, 'slot-reset', { slot: req.slot })
+
+        // Compose context for the fill model: original hint + the user's
+        // iteration instruction + the slot's existing content (so the model
+        // can revise rather than start from scratch).
+        const composedHint =
+          `${slotInfo.hint}` +
+          `\n\nITERATION INSTRUCTION: ${req.instruction}` +
+          `\n\nCURRENT SLOT CONTENT (for revision; preserve what works, change what the instruction asks for):\n${slotInfo.innerHtml}`
+
+        const effectiveModel = resolveSlotModel({
+          userModel: req.model,
+          provider: req.provider,
+          dispatchEnabled,
+          slotAlias: slotInfo.modelAlias
+        })
+
+        const priorIdx = conv.turns.findIndex((t) => t.id === priorTurn.id)
+        const historyBeforePrior =
+          priorIdx > 0 ? conv.turns.slice(0, priorIdx) : []
+
+        let lastSent = 0
+        const fillResult = await provider.generateSlotFill(
+          {
+            prompt: priorTurn.prompt,
+            history: historyBeforePrior,
+            provider: req.provider,
+            model: effectiveModel,
+            skeleton: priorTurn.html,
+            slotName: req.slot,
+            slotHint: composedHint
+          },
+          apiKey,
+          {
+            signal: ac.signal,
+            onChunk: (accumulated) => {
+              const delta = accumulated.slice(lastSent)
+              if (!delta) return
+              lastSent = accumulated.length
+              sendSseEvent(id, 'slot-chunk', {
+                slot: req.slot,
+                chunk: delta
+              })
+            }
+          }
+        )
+
+        sendSseEvent(id, 'slot-done', { slot: req.slot })
+        sendSseEvent(id, 'all-done', {})
+        closeSseChannel(id)
+
+        // New turn's HTML = prior turn's HTML with ONLY this slot's content
+        // replaced. fillSlotsInHtml leaves unspecified slots untouched.
+        const newTurnHtml = fillSlotsInHtml(
+          priorTurn.html,
+          new Map([[req.slot, fillResult.html]])
+        )
+
+        if (!sender.isDestroyed()) {
+          sender.send('llm:done', id, {
+            html: newTurnHtml,
+            usage: fillResult.usage
+          })
+        }
+        cleanupSlot(id)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        failSlot(id)
+        if (!sender.isDestroyed()) sender.send('llm:error', id, msg)
+      } finally {
+        activeGenerations.delete(id)
+      }
+    })()
+
+    return id
   })
 
   createWindow()

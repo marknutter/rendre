@@ -3,6 +3,7 @@ import type {
   Conversation,
   GenerateRequest,
   GenerateResponse,
+  IterateSlotRequest,
   ProviderConfig,
   ProviderId,
   ToolUseEvent
@@ -23,6 +24,8 @@ const api = {
     ipcRenderer.invoke('llm:start', req),
   cancelGenerate: (id: string): Promise<void> =>
     ipcRenderer.invoke('llm:cancel', id),
+  iterateSlot: (req: IterateSlotRequest): Promise<string> =>
+    ipcRenderer.invoke('llm:iterate-slot', req),
 
   onStreamUrl: (cb: (id: string, url: string) => void): (() => void) => {
     const handler = (_e: unknown, id: string, url: string) => cb(id, url)
