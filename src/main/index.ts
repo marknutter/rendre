@@ -15,15 +15,15 @@ import {
   pushChunk,
   appendAndFinish,
   failSlot,
-  getBuffer,
   sendSseEvent,
   closeSseChannel,
-  waitForSse,
   cleanupSlot
 } from './streamServer'
 import { slotBootstrap } from './slotBootstrap'
 import { parseSlots, fillSlotsInHtml } from './slotParser'
+import type { SlotDef } from './slotParser'
 import { resolveSlotModel } from './slotModelResolver'
+import { DynamicPool } from './dynamicPool'
 import type {
   Conversation,
   GenerateRequest,
@@ -42,30 +42,6 @@ function uid(): string {
 const FILL_CONCURRENCY = 4
 
 const activeGenerations = new Map<string, AbortController>()
-
-/**
- * Run `task` over `items` with at most `limit` concurrent invocations. Per-item
- * errors do not abort the others — the task is expected to handle its own
- * errors and decide what visible effect (if any) to surface.
- */
-async function runWithConcurrency<T>(
-  items: readonly T[],
-  limit: number,
-  task: (item: T, index: number) => Promise<void>
-): Promise<void> {
-  let cursor = 0
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (true) {
-        const i = cursor++
-        if (i >= items.length) return
-        await task(items[i], i)
-      }
-    }
-  )
-  await Promise.all(workers)
-}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -145,70 +121,24 @@ app.whenReady().then(async () => {
     })
 
     ;(async () => {
-      try {
-        // --- Orchestrator pass: stream the skeleton ---
-        // The orchestrator does structural layout work; the fastest model in
-        // the provider family is good enough and cuts skeleton-phase latency
-        // by 40–60%. Fills still use the user's chosen model below.
-        const orchReq: GenerateRequest = {
-          ...req,
-          model: ORCHESTRATOR_MODEL_BY_PROVIDER[req.provider]
-        }
-        const orchResult = await provider.generate(orchReq, apiKey, {
-          signal: ac.signal,
-          onChunk: (text) => pushChunk(id, text),
-          onTool: (event) => {
-            if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
-          }
-        })
+      // Per-turn shared state. The pool, the fills map, and the aggregate
+      // usage are all populated incrementally as the orchestrator's stream
+      // arrives and fills complete.
+      const pool = new DynamicPool(FILL_CONCURRENCY)
+      const seenSlots = new Set<string>()
+      const fills = new Map<string, string>()
+      const aggUsageRef: { current: UsageStats | undefined } = { current: undefined }
 
-        // Use the canonical (extracted) skeleton for parsing and as the basis
-        // for the final HTML; getBuffer holds the raw model output which may
-        // include code fences or trailing text.
-        const skeleton = orchResult.html
-        const slots = parseSlots(skeleton)
-
-        // Inject the SSE bootstrap and close the HTTP stream. Append after the
-        // last seen </html> if present (browsers tolerate trailing content
-        // either way, but in-document is cleaner).
-        appendAndFinish(id, slotBootstrap(id))
-
-        // No slots → nothing to fill, we're done.
-        if (slots.length === 0) {
-          // No SSE channel needed, but ensure cleanup
-          sendSseEvent(id, 'all-done', {})
-          closeSseChannel(id)
-          if (!sender.isDestroyed()) {
-            sender.send('llm:done', id, {
-              html: skeleton,
-              usage: orchResult.usage
-            })
-          }
-          cleanupSlot(id)
-          activeGenerations.delete(id)
-          return
-        }
-
-        // Give the page a chance to connect its EventSource. Queued events
-        // would still be delivered, but live delivery feels better.
-        await waitForSse(id)
-
-        // --- Fill pass: bounded-concurrency parallel fills ---
-        // Cap concurrent fills so a high-slot-count turn doesn't blow past
-        // provider rate limits (Anthropic 50 RPM on paid tier handles 4 easily;
-        // OpenAI varies). Per-slot errors are isolated — one failure does not
-        // stop the others.
-        const aggUsageRef: { current: UsageStats | undefined } = { current: orchResult.usage }
-        const fills = new Map<string, string>()
-        await runWithConcurrency(slots, FILL_CONCURRENCY, async (slot) => {
+      const dispatchSlot = (slot: SlotDef, skeletonSnapshot: string): void => {
+        pool.enqueue(async () => {
           if (ac.signal.aborted) return
-          let lastSent = 0
           const effectiveModel = resolveSlotModel({
             userModel: req.model,
             provider: req.provider,
             dispatchEnabled,
             slotAlias: slot.modelAlias
           })
+          let lastSent = 0
           try {
             const fillResult = await provider.generateSlotFill(
               {
@@ -216,7 +146,7 @@ app.whenReady().then(async () => {
                 history: req.history,
                 provider: req.provider,
                 model: effectiveModel,
-                skeleton,
+                skeleton: skeletonSnapshot,
                 slotName: slot.name,
                 slotHint: slot.hint
               },
@@ -247,18 +177,84 @@ app.whenReady().then(async () => {
             sendSseEvent(id, 'slot-done', { slot: slot.name })
           }
         })
-        const aggUsage = aggUsageRef.current
+      }
+
+      try {
+        // --- Orchestrator pass: stream the skeleton AND dispatch fills as
+        // each slot is declared. The serial orchestrator → fills boundary is
+        // collapsed: fills start as soon as their <section data-slot=...> tag
+        // is fully parsed, while the orchestrator keeps streaming the rest of
+        // the skeleton. Each fill captures a snapshot of the partial skeleton
+        // at dispatch time as its context.
+        const orchReq: GenerateRequest = {
+          ...req,
+          model: ORCHESTRATOR_MODEL_BY_PROVIDER[req.provider]
+        }
+        const orchResult = await provider.generate(orchReq, apiKey, {
+          signal: ac.signal,
+          onChunk: (text) => {
+            pushChunk(id, text)
+            // Re-scan the accumulated buffer for new slot declarations. We
+            // re-scan every chunk; the regex is fast, buffers are small.
+            const declared = parseSlots(text)
+            for (const slot of declared) {
+              if (seenSlots.has(slot.name)) continue
+              seenSlots.add(slot.name)
+              dispatchSlot(slot, text)
+            }
+          },
+          onTool: (event) => {
+            if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
+          }
+        })
+
+        aggUsageRef.current = addUsage(aggUsageRef.current, orchResult.usage)
+
+        // Canonical skeleton — used for final HTML assembly. If the model
+        // wrapped its output in fences or had other noise, extractHtml cleans
+        // it up; slot detection above ran on the raw stream so dispatch order
+        // is preserved.
+        const skeleton = orchResult.html
+
+        // Inject the SSE bootstrap and close the HTTP stream. The browser's
+        // EventSource may not be connected yet — fills' early events queue in
+        // streamServer and flush on connection.
+        appendAndFinish(id, slotBootstrap(id))
+
+        // No slots → orchestrator's output is the whole answer.
+        if (seenSlots.size === 0) {
+          sendSseEvent(id, 'all-done', {})
+          closeSseChannel(id)
+          if (!sender.isDestroyed()) {
+            sender.send('llm:done', id, {
+              html: skeleton,
+              usage: aggUsageRef.current
+            })
+          }
+          cleanupSlot(id)
+          activeGenerations.delete(id)
+          return
+        }
+
+        // Wait for every dispatched fill to finish (succeed or fail).
+        await pool.close()
 
         sendSseEvent(id, 'all-done', {})
         closeSseChannel(id)
 
         const finalHtml = fillSlotsInHtml(skeleton, fills)
         if (!sender.isDestroyed()) {
-          sender.send('llm:done', id, { html: finalHtml, usage: aggUsage })
+          sender.send('llm:done', id, {
+            html: finalHtml,
+            usage: aggUsageRef.current
+          })
         }
         cleanupSlot(id)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
+        // Drain in-flight fills before reporting the error to avoid leaking
+        // workers. Their internal try/catch swallows AbortError.
+        await pool.close().catch(() => undefined)
         failSlot(id)
         if (!sender.isDestroyed()) sender.send('llm:error', id, msg)
       } finally {
