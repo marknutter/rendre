@@ -59,6 +59,19 @@ export const ANTHROPIC_MODELS = [
 
 export const OPENAI_MODELS = ['gpt-5', 'gpt-5-mini', 'gpt-4o'] as const
 
+/**
+ * Model used for the orchestrator pass (skeleton design), independent of the
+ * user's chosen default model. The orchestrator does structural layout work
+ * that doesn't require deep reasoning; using the fastest model in the family
+ * cuts skeleton-phase latency without meaningfully hurting layout quality.
+ *
+ * Fills still use the user's chosen model (and per-slot dispatch when enabled).
+ */
+export const ORCHESTRATOR_MODEL_BY_PROVIDER: Record<ProviderId, string> = {
+  anthropic: 'claude-haiku-4-5-20251001',
+  openai: 'gpt-5-mini'
+}
+
 export const DEFAULT_CONFIG: ProviderConfig = {
   provider: 'anthropic',
   model: 'claude-sonnet-4-6',
