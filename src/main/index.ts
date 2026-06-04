@@ -23,6 +23,7 @@ import {
 } from './streamServer'
 import { slotBootstrap } from './slotBootstrap'
 import { parseSlots, fillSlotsInHtml } from './slotParser'
+import { resolveSlotModel } from './slotModelResolver'
 import type {
   Conversation,
   GenerateRequest,
@@ -133,6 +134,8 @@ app.whenReady().then(async () => {
       throw new Error(`No API key set for ${req.provider}`)
     }
 
+    const turnCfg = await loadConfig()
+    const dispatchEnabled = turnCfg.useSlotDispatch === true
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -192,13 +195,19 @@ app.whenReady().then(async () => {
         await runWithConcurrency(slots, FILL_CONCURRENCY, async (slot) => {
           if (ac.signal.aborted) return
           let lastSent = 0
+          const effectiveModel = resolveSlotModel({
+            userModel: req.model,
+            provider: req.provider,
+            dispatchEnabled,
+            slotAlias: slot.modelAlias
+          })
           try {
             const fillResult = await provider.generateSlotFill(
               {
                 prompt: req.prompt,
                 history: req.history,
                 provider: req.provider,
-                model: req.model,
+                model: effectiveModel,
                 skeleton,
                 slotName: slot.name,
                 slotHint: slot.hint

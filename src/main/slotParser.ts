@@ -1,3 +1,6 @@
+import type { SlotModelAlias } from '../shared/types'
+import { SLOT_MODEL_ALIASES } from '../shared/types'
+
 /**
  * Parses the orchestrator's HTML output to discover `[data-slot]` elements in
  * document order. We use a regex over the source rather than a real DOM parser
@@ -7,6 +10,8 @@
 export interface SlotDef {
   name: string
   hint: string
+  /** Optional orchestrator-declared model alias for this slot (promote-only). */
+  modelAlias?: SlotModelAlias
 }
 
 export function parseSlots(html: string): SlotDef[] {
@@ -21,8 +26,12 @@ export function parseSlots(html: string): SlotDef[] {
     if (!name) continue
     if (seen.has(name)) continue
     const hint = extractAttr(attrs, 'data-slot-hint') ?? ''
+    const rawAlias = extractAttr(attrs, 'data-slot-model')?.toLowerCase()
+    const modelAlias = rawAlias && (SLOT_MODEL_ALIASES as readonly string[]).includes(rawAlias)
+      ? (rawAlias as SlotModelAlias)
+      : undefined
     seen.add(name)
-    slots.push({ name, hint })
+    slots.push({ name, hint, modelAlias })
   }
   return slots
 }

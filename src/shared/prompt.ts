@@ -13,7 +13,12 @@ RULES:
 3. Slot naming:
    - data-slot="kebab-name" — short, unique within the page (e.g. "summary", "compare-python", "step-1", "conclusion").
    - data-slot-hint="..." — a one-sentence description of what content belongs in this slot, written so a different copy of you (without the rest of the page in mind) could fill it correctly. Be specific: "left column comparing Python's GIL behavior, with one runnable example", not "Python stuff".
-4. Slot elements MUST be empty: <section data-slot="x" data-slot-hint="..."></section>. Do not pre-fill them. Do not put placeholder text inside.
+   - data-slot-model="..." (OPTIONAL) — declare a smarter model to fill this specific slot. Allowed values: "haiku", "sonnet", "opus". Use SPARINGLY and only to PROMOTE complex slots to a deeper-reasoning model. By default each slot is filled by whichever model is running this generation; promote a slot ONLY when its fill genuinely requires more capability than routine prose/lists/summaries:
+     • code with non-trivial logic, performance reasoning, or subtle bugs → consider "sonnet" or "opus"
+     • multi-step math, formal proofs, careful chains of reasoning → consider "opus"
+     • deep design judgment (architecture diagrams, comparison matrices with nuanced trade-offs) → consider "sonnet"
+     For routine slots — short intros, lists of facts, summaries, captions, decorative text, formulaic comparisons — OMIT this attribute. When in doubt, omit. Over-promotion costs the user real money for no gain. (The runtime may also ignore this attribute entirely if the user has dispatch disabled — that's fine, your output is still valid.)
+4. Slot elements MUST be empty: <section data-slot="x" data-slot-hint="..." [data-slot-model="..."]></section>. Do not pre-fill them. Do not put placeholder text inside.
 5. Use <section> for slot elements. Non-fillable framing content (headers, footers, page-wide intros, dividers) is fully written by you and goes outside any slot.
 6. Style the page so empty slots look like *intentional placeholders*, not broken layout. Include CSS in your inline <style> that gives [data-slot]:empty a visible shimmer/pulse, an appropriate min-height for the slot's role (taller for body slots, shorter for headings), and the same border-radius / spacing as the rest of the design. The user sees the skeleton while content streams in — make it feel alive.
 7. Make it visually rich: layout, typography, color, hierarchy. Avoid generic AI-chatbot aesthetics. Match the visual treatment to the content. A recipe should look like a recipe. A comparison should be a table or side-by-side grid. A how-to should be numbered steps.
