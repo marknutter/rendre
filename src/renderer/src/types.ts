@@ -2,6 +2,7 @@ import type {
   Conversation,
   GenerateRequest,
   GenerateResponse,
+  IterateSlotRequest,
   ProviderConfig,
   ProviderId,
   ToolUseEvent
@@ -17,6 +18,7 @@ export interface RendreApi {
 
   startGenerate: (req: GenerateRequest) => Promise<string>
   cancelGenerate: (id: string) => Promise<void>
+  iterateSlot: (req: IterateSlotRequest) => Promise<string>
   onStreamUrl: (cb: (id: string, url: string) => void) => () => void
   onDone: (cb: (id: string, result: GenerateResponse) => void) => () => void
   onError: (cb: (id: string, msg: string) => void) => () => void

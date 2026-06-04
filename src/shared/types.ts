@@ -62,6 +62,21 @@ export interface GenerateRequest {
   isAdditive?: boolean
 }
 
+/**
+ * Request to refill ONE slot in a prior turn with a new instruction. Triggered
+ * by a click on a `[data-rendre-iterate]` button inside the rendered page; the
+ * new content streams into the same DOM slot. A new conversation turn is
+ * created from the refilled result so history stays immutable.
+ */
+export interface IterateSlotRequest {
+  convId: string
+  turnId: string
+  slot: string
+  instruction: string
+  provider: ProviderId
+  model: string
+}
+
 export interface UsageStats {
   inputTokens: number
   outputTokens: number
