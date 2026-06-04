@@ -103,12 +103,39 @@ export function slotBootstrap(streamId: string, baseUrl: string): string {
 
   window.__rendreAttach = attach;
 
+  // Edit-mode helpers. The host can flip the iframe into a direct-manipulation
+  // mode where the whole body is contenteditable and slot boundaries become
+  // visible. Save captures the edited HTML; Cancel reverts via a snapshot
+  // taken at edit-mode entry.
+  var editSnapshot = null;
+  window.__rendreEnterEdit = function () {
+    if (document.documentElement.dataset.rendreEdit === '1') return;
+    editSnapshot = document.body ? document.body.innerHTML : null;
+    document.documentElement.dataset.rendreEdit = '1';
+    if (document.body) document.body.contentEditable = 'true';
+  };
+  window.__rendreExitEdit = function (revert) {
+    if (document.documentElement.dataset.rendreEdit !== '1') return;
+    if (revert && editSnapshot !== null && document.body) {
+      document.body.innerHTML = editSnapshot;
+    }
+    editSnapshot = null;
+    document.documentElement.dataset.rendreEdit = '';
+    if (document.body) document.body.contentEditable = 'false';
+  };
+  window.__rendreGetEditedHtml = function () {
+    return '<!doctype html>\\n' + document.documentElement.outerHTML;
+  };
+
   // Iterate-button click delegation. The user clicks a <button
   // data-rendre-iterate="<instruction>"> embedded in slot content; we find the
   // enclosing slot, then post the (slot, instruction, shiftKey) tuple to the
   // host via a magic-prefixed console.log. The host (App.tsx) listens via the
   // webview's console-message event.
   document.addEventListener('click', function (e) {
+    // In edit mode iterate buttons are styled disabled and shouldn't fire;
+    // clicking should let the user edit the button text instead.
+    if (document.documentElement.dataset.rendreEdit === '1') return;
     var target = e.target;
     if (!target || target.nodeType !== 1) return;
     var btn = target.closest('[data-rendre-iterate]');
@@ -187,6 +214,26 @@ button[data-rendre-iterate]:active {
 button[data-rendre-iterate]:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
+}
+
+/* Direct-edit mode: outline editable slot boundaries so the user can see
+   what they're working with; gray out iterate buttons (which are disabled
+   via the click-handler guard but should also look inert). */
+html[data-rendre-edit="1"] [data-slot] {
+  outline: 1.5px dashed rgba(124, 92, 255, 0.55);
+  outline-offset: 6px;
+  border-radius: 4px;
+  transition: outline-color 0.15s;
+}
+html[data-rendre-edit="1"] [data-slot]:focus-within {
+  outline-color: rgba(124, 92, 255, 1);
+}
+html[data-rendre-edit="1"] button[data-rendre-iterate] {
+  pointer-events: none;
+  opacity: 0.4;
+}
+html[data-rendre-edit="1"] body {
+  caret-color: rgba(124, 92, 255, 1);
 }
 `.trim()
 
