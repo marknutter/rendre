@@ -211,6 +211,19 @@ export function App() {
 
     const offTool = window.rendre.onTool((id, event) => {
       if (!generationRef.current || generationRef.current.id !== id) return
+      if (event.tool === 'search_images') {
+        const query = (event.input as { query?: string } | undefined)?.query
+        const label = query ?? 'images'
+        if (event.type === 'start') {
+          setToolStatus(`🖼 Searching images: ${label}…`)
+        } else if (event.type === 'done') {
+          setToolStatus(`Found images for "${label}". Composing webpage…`)
+        } else if (event.type === 'error') {
+          setToolStatus(`Image search error: ${event.error ?? label}`)
+        }
+        return
+      }
+      // fetch_url (and any other URL-shaped tool)
       const url = (event.input as { url?: string } | undefined)?.url
       const label = url ?? event.tool
       if (event.type === 'start') {

@@ -7,7 +7,7 @@ import {
   loadConfig,
   saveConfig
 } from './store'
-import { getKey, setKey, hasKey } from './keys'
+import { getKey, setKey, hasKey, getBraveKey, setBraveKey, hasBraveKey } from './keys'
 import {
   startStreamServer,
   createSlot,
@@ -107,6 +107,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('keys:has', (_e, p: ProviderId) => hasKey(p))
   ipcMain.handle('keys:set', (_e, p: ProviderId, k: string) => setKey(p, k))
 
+  ipcMain.handle('keys:hasBrave', () => hasBraveKey())
+  ipcMain.handle('keys:setBrave', (_e, k: string) => setBraveKey(k))
+  // Returning the raw key would be unsafe; getBraveKey is consumed by the tool
+  // executor in the main process, so the renderer never needs it directly.
+  void getBraveKey
+
   ipcMain.handle('llm:start', async (e, req: GenerateRequest) => {
     const id = uid()
     const ac = new AbortController()
@@ -120,6 +126,7 @@ app.whenReady().then(async () => {
 
     const turnCfg = await loadConfig()
     const dispatchEnabled = turnCfg.useSlotDispatch === true
+    const imageSearchEnabled = turnCfg.imageSearchEnabled !== false
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -162,14 +169,24 @@ app.whenReady().then(async () => {
               apiKey,
               {
                 signal: ac.signal,
+                imageSearchEnabled,
                 onChunk: (accumulated) => {
                   const delta = accumulated.slice(lastSent)
-                  if (!delta) return
-                  lastSent = accumulated.length
-                  sendSseEvent(id, 'slot-chunk', {
-                    slot: slot.name,
-                    chunk: delta
-                  })
+                  if (delta) {
+                    lastSent = accumulated.length
+                    sendSseEvent(id, 'slot-chunk', {
+                      slot: slot.name,
+                      chunk: delta
+                    })
+                  } else if (accumulated.length < lastSent) {
+                    // Tool turn rolled back the buffer — reset the slot and
+                    // resume from the new shorter length.
+                    lastSent = accumulated.length
+                    sendSseEvent(id, 'slot-reset', { slot: slot.name })
+                  }
+                },
+                onTool: (event) => {
+                  if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
                 }
               }
             )
@@ -198,6 +215,7 @@ app.whenReady().then(async () => {
           // reuses the prior turn's bootstrap script via __rendreAttach).
           const orchResult = await provider.generate(orchReq, apiKey, {
             signal: ac.signal,
+            imageSearchEnabled,
             // No onChunk wiring to streamServer — the HTTP stream isn't
             // navigated to for additive turns.
             onTool: (event) => {
@@ -246,6 +264,7 @@ app.whenReady().then(async () => {
         // declaration appears in the orchestrator's output.
         const orchResult = await provider.generate(orchReq, apiKey, {
           signal: ac.signal,
+          imageSearchEnabled,
           onChunk: (text) => {
             pushChunk(id, text)
             const declared = parseSlots(text)
@@ -338,6 +357,7 @@ app.whenReady().then(async () => {
 
     const turnCfg = await loadConfig()
     const dispatchEnabled = turnCfg.useSlotDispatch === true
+    const imageSearchEnabled = turnCfg.imageSearchEnabled !== false
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -382,14 +402,22 @@ app.whenReady().then(async () => {
           apiKey,
           {
             signal: ac.signal,
+            imageSearchEnabled,
             onChunk: (accumulated) => {
               const delta = accumulated.slice(lastSent)
-              if (!delta) return
-              lastSent = accumulated.length
-              sendSseEvent(id, 'slot-chunk', {
-                slot: req.slot,
-                chunk: delta
-              })
+              if (delta) {
+                lastSent = accumulated.length
+                sendSseEvent(id, 'slot-chunk', {
+                  slot: req.slot,
+                  chunk: delta
+                })
+              } else if (accumulated.length < lastSent) {
+                lastSent = accumulated.length
+                sendSseEvent(id, 'slot-reset', { slot: req.slot })
+              }
+            },
+            onTool: (event) => {
+              if (!sender.isDestroyed()) sender.send('llm:tool', id, event)
             }
           }
         )

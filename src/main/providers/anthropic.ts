@@ -13,15 +13,9 @@ import {
   SLOT_FILL_PROMPT
 } from '../../shared/prompt'
 import { extractHtml, extractRegion } from './extract'
-import {
-  FETCH_URL_TOOL,
-  fetchUrl,
-  formatFetchResult,
-  type FetchUrlInput
-} from '../tools/fetchUrl'
+import { buildToolList, createToolBudget, executeTool } from '../tools'
 
 const MAX_TOOL_TURNS = 6
-const MAX_TOOL_CALLS = 5
 
 export const anthropicProvider: LLMProvider = {
   id: 'anthropic',
@@ -55,7 +49,7 @@ export const anthropicProvider: LLMProvider = {
     let totalOutput = 0
     let totalCacheRead = 0
     let totalCacheCreation = 0
-    let toolCallsMade = 0
+    const budget = createToolBudget()
 
     const systemPrompt =
       req.isAdditive && req.history.length > 0
@@ -74,7 +68,7 @@ export const anthropicProvider: LLMProvider = {
               cache_control: { type: 'ephemeral' }
             }
           ],
-          tools: [FETCH_URL_TOOL],
+          tools: buildToolList({ imageSearchEnabled: opts.imageSearchEnabled }),
           messages
         },
         { signal: opts.signal }
@@ -130,51 +124,13 @@ export const anthropicProvider: LLMProvider = {
         } catch {
           input = {}
         }
-
-        if (toolCallsMade >= MAX_TOOL_CALLS) {
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: t.id,
-            content: `Error: tool-call budget exceeded (max ${MAX_TOOL_CALLS} per turn). Compose the response with what you have.`,
-            is_error: true
-          })
-          continue
-        }
-        toolCallsMade++
-
-        opts.onTool?.({ type: 'start', tool: t.name, input })
-        try {
-          if (t.name === 'fetch_url') {
-            const result = await fetchUrl(input as FetchUrlInput, opts.signal)
-            opts.onTool?.({ type: 'done', tool: t.name, input })
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: t.id,
-              content: formatFetchResult(result)
-            })
-          } else {
-            opts.onTool?.({
-              type: 'error',
-              tool: t.name,
-              error: `Unknown tool: ${t.name}`
-            })
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: t.id,
-              content: `Unknown tool: ${t.name}`,
-              is_error: true
-            })
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          opts.onTool?.({ type: 'error', tool: t.name, input, error: msg })
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: t.id,
-            content: `Error: ${msg}`,
-            is_error: true
-          })
-        }
+        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: t.id,
+          content: result.content,
+          ...(result.isError ? { is_error: true } : {})
+        })
       }
 
       messages.push({ role: 'user', content: toolResults })
@@ -225,41 +181,108 @@ export const anthropicProvider: LLMProvider = {
       content: `Fill the slot named "${req.slotName}". Hint: ${req.slotHint}\n\nOutput ONLY the inner HTML for this slot (no wrapping <section>, no <html>/<body>, no markdown).`
     })
 
-    const stream = client.messages.stream(
-      {
-        model: req.model,
-        max_tokens: 8000,
-        system: [
-          {
-            type: 'text',
-            text: SLOT_FILL_PROMPT,
-            cache_control: { type: 'ephemeral' }
-          }
-        ],
-        messages
-      },
-      { signal: opts.signal }
-    )
-
+    const budget = createToolBudget()
     let fullText = ''
-    for await (const event of stream) {
-      if (
-        event.type === 'content_block_delta' &&
-        event.delta.type === 'text_delta'
-      ) {
-        fullText += event.delta.text
-        opts.onChunk?.(fullText)
+    let inputTokens = 0
+    let outputTokens = 0
+    let cacheReadTokens = 0
+    let cacheCreationTokens = 0
+
+    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      const stream = client.messages.stream(
+        {
+          model: req.model,
+          max_tokens: 8000,
+          system: [
+            {
+              type: 'text',
+              text: SLOT_FILL_PROMPT,
+              cache_control: { type: 'ephemeral' }
+            }
+          ],
+          tools: buildToolList({ imageSearchEnabled: opts.imageSearchEnabled }),
+          messages
+        },
+        { signal: opts.signal }
+      )
+
+      // Buffer this turn's text separately. Only commit to fullText if the turn
+      // ends without a tool call — otherwise the text is pre-tool preamble we
+      // should discard (the post-tool turn re-emits the actual slot content).
+      let turnText = ''
+      const pendingTools: Array<{ id: string; name: string; jsonBuf: string }> = []
+      let currentToolIdx: number | null = null
+
+      for await (const event of stream) {
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'tool_use') {
+            pendingTools.push({
+              id: event.content_block.id,
+              name: event.content_block.name,
+              jsonBuf: ''
+            })
+            currentToolIdx = pendingTools.length - 1
+          } else {
+            currentToolIdx = null
+          }
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'text_delta') {
+            turnText += event.delta.text
+            opts.onChunk?.(fullText + turnText)
+          } else if (
+            event.delta.type === 'input_json_delta' &&
+            currentToolIdx !== null
+          ) {
+            pendingTools[currentToolIdx].jsonBuf += event.delta.partial_json
+          }
+        } else if (event.type === 'content_block_stop') {
+          currentToolIdx = null
+        }
       }
+
+      const finalMsg = await stream.finalMessage()
+      inputTokens += finalMsg.usage.input_tokens
+      outputTokens += finalMsg.usage.output_tokens
+      cacheReadTokens += finalMsg.usage.cache_read_input_tokens ?? 0
+      cacheCreationTokens += finalMsg.usage.cache_creation_input_tokens ?? 0
+
+      if (finalMsg.stop_reason !== 'tool_use' || pendingTools.length === 0) {
+        fullText += turnText
+        break
+      }
+
+      // Tool turn: discard the preamble text from the streamed view by re-emitting
+      // just what we'd already committed. The next turn's text replaces it.
+      opts.onChunk?.(fullText)
+
+      messages.push({ role: 'assistant', content: finalMsg.content })
+
+      const toolResults: Anthropic.ToolResultBlockParam[] = []
+      for (const t of pendingTools) {
+        let input: unknown = {}
+        try {
+          input = t.jsonBuf ? JSON.parse(t.jsonBuf) : {}
+        } catch {
+          input = {}
+        }
+        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: t.id,
+          content: result.content,
+          ...(result.isError ? { is_error: true } : {})
+        })
+      }
+      messages.push({ role: 'user', content: toolResults })
     }
 
-    const finalMsg = await stream.finalMessage()
     return {
       html: stripSlotWrapper(fullText, req.slotName),
       usage: {
-        inputTokens: finalMsg.usage.input_tokens,
-        outputTokens: finalMsg.usage.output_tokens,
-        cacheReadTokens: finalMsg.usage.cache_read_input_tokens ?? 0,
-        cacheCreationTokens: finalMsg.usage.cache_creation_input_tokens ?? 0
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheCreationTokens
       }
     }
   }

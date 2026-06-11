@@ -15,12 +15,21 @@ export function Settings({ config, onClose, onSaved }: Props) {
   const [hasKey, setHasKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [useSlotDispatch, setUseSlotDispatch] = useState(config.useSlotDispatch)
+  const [imageSearchEnabled, setImageSearchEnabled] = useState(
+    config.imageSearchEnabled !== false
+  )
+  const [braveKey, setBraveKey] = useState('')
+  const [hasBraveKey, setHasBraveKey] = useState(false)
 
   const models = provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS
 
   useEffect(() => {
     void window.rendre.hasKey(provider).then(setHasKey)
   }, [provider])
+
+  useEffect(() => {
+    void window.rendre.hasBraveKey().then(setHasBraveKey)
+  }, [])
 
   useEffect(() => {
     if (!(models as readonly string[]).includes(model)) {
@@ -34,7 +43,16 @@ export function Settings({ config, onClose, onSaved }: Props) {
       if (apiKey.trim()) {
         await window.rendre.setKey(provider, apiKey.trim())
       }
-      const next: ProviderConfig = { ...config, provider, model, useSlotDispatch }
+      if (braveKey.trim()) {
+        await window.rendre.setBraveKey(braveKey.trim())
+      }
+      const next: ProviderConfig = {
+        ...config,
+        provider,
+        model,
+        useSlotDispatch,
+        imageSearchEnabled
+      }
       await window.rendre.setConfig(next)
       onSaved(next)
     } finally {
@@ -98,6 +116,45 @@ export function Settings({ config, onClose, onSaved }: Props) {
             smarter model than your default. Best paired with Haiku as the default — the
             orchestrator handles routine sections with Haiku and escalates complex ones to
             Sonnet/Opus. Quality on a per-slot basis is not yet validated.
+          </p>
+        </div>
+
+        <div className="field">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={imageSearchEnabled}
+              onChange={(e) => setImageSearchEnabled(e.target.checked)}
+            />
+            <span>Enable web image search</span>
+          </label>
+          <p style={{ color: '#888', fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+            When on, responses can inline images from Wikimedia Commons (free, CC-licensed)
+            and Brave Search (requires a key below). Adds ~500ms when the model decides to
+            search.
+          </p>
+        </div>
+
+        <div className="field">
+          <label>
+            Brave Search API key{' '}
+            {hasBraveKey && (
+              <span style={{ color: '#6fd16f' }}>(set — leave blank to keep)</span>
+            )}
+            <span style={{ color: '#888', marginLeft: 6, fontSize: 12 }}>— optional</span>
+          </label>
+          <input
+            type="password"
+            value={braveKey}
+            onChange={(e) => setBraveKey(e.target.value)}
+            placeholder="Brave Search Subscription Token"
+            disabled={!imageSearchEnabled}
+          />
+          <p style={{ color: '#888', fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+            Brave covers everything Wikimedia doesn't (news, products, modern photography).
+            Free tier: 2k queries/month. Get a key at{' '}
+            <span style={{ fontFamily: 'monospace' }}>api.search.brave.com</span>. Without a
+            Brave key, image search still works via Wikimedia only.
           </p>
         </div>
 

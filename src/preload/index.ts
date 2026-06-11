@@ -19,6 +19,8 @@ const api = {
   hasKey: (p: ProviderId): Promise<boolean> => ipcRenderer.invoke('keys:has', p),
   setKey: (p: ProviderId, k: string): Promise<void> =>
     ipcRenderer.invoke('keys:set', p, k),
+  hasBraveKey: (): Promise<boolean> => ipcRenderer.invoke('keys:hasBrave'),
+  setBraveKey: (k: string): Promise<void> => ipcRenderer.invoke('keys:setBrave', k),
 
   startGenerate: (req: GenerateRequest): Promise<string> =>
     ipcRenderer.invoke('llm:start', req),
