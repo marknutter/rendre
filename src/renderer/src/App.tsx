@@ -38,6 +38,7 @@ export function App() {
   const [lastUsage, setLastUsage] = useState<UsageStats | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   const webviewRef = useRef<(HTMLElement & { src: string }) | null>(null)
   const lastBlobUrlRef = useRef<string | null>(null)
@@ -352,6 +353,94 @@ export function App() {
     void persistConversations(updated)
   }
 
+  function enterEditMode() {
+    if (editing || generating || !canvasSrc || canvasSrc.kind !== 'turn') return
+    const wv = webviewRef.current as unknown as {
+      executeJavaScript?: (code: string) => Promise<unknown>
+    } | null
+    void wv?.executeJavaScript?.(`window.__rendreEnterEdit && window.__rendreEnterEdit()`)
+    setEditing(true)
+  }
+
+  async function saveEdits() {
+    if (!editing) return
+    const wv = webviewRef.current as unknown as {
+      executeJavaScript?: (code: string) => Promise<unknown>
+    } | null
+    if (!wv?.executeJavaScript) {
+      setEditing(false)
+      return
+    }
+    let editedHtml: string
+    try {
+      const result = await wv.executeJavaScript(
+        `window.__rendreGetEditedHtml ? window.__rendreGetEditedHtml() : null`
+      )
+      if (typeof result !== 'string' || !result) {
+        setEditing(false)
+        return
+      }
+      editedHtml = result
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setEditing(false)
+      return
+    }
+
+    // Exit edit mode in the iframe BEFORE the canvasSrc reload so the
+    // contenteditable state doesn't carry into the new render.
+    void wv.executeJavaScript?.(`window.__rendreExitEdit && window.__rendreExitEdit(false)`)
+
+    let conv = activeConv
+    if (!conv) {
+      conv = freshConversation()
+      conv.title = 'Edited page'
+      setActiveConvId(conv.id)
+      await persistConversations([conv, ...conversations])
+    }
+
+    const turn: Turn = {
+      id: uid(),
+      createdAt: Date.now(),
+      prompt: '✏️ Edited',
+      html: editedHtml,
+      provider: config.provider,
+      model: config.model
+    }
+    setConversations((prev) => {
+      const existingIdx = prev.findIndex((c) => c.id === conv!.id)
+      const updated: Conversation = {
+        ...conv!,
+        updatedAt: Date.now(),
+        title: conv!.turns.length === 0 ? '✏️ Edited page' : conv!.title,
+        turns: [...conv!.turns, turn]
+      }
+      let next: Conversation[]
+      if (existingIdx >= 0) {
+        next = [...prev]
+        next[existingIdx] = updated
+      } else {
+        next = [updated, ...prev]
+      }
+      void window.rendre.setHistory(next)
+      return next
+    })
+    setActiveTurnId(turn.id)
+    setCanvasSrc({ kind: 'turn', html: editedHtml })
+    setEditing(false)
+  }
+
+  function cancelEdits() {
+    if (!editing) return
+    const wv = webviewRef.current as unknown as {
+      executeJavaScript?: (code: string) => Promise<unknown>
+    } | null
+    void wv?.executeJavaScript?.(
+      `window.__rendreExitEdit && window.__rendreExitEdit(true)`
+    )
+    setEditing(false)
+  }
+
   async function handleIterateClick(
     slot: string,
     instruction: string,
@@ -436,6 +525,7 @@ export function App() {
   const additiveMode = activeConv?.additiveMode === true
   const canExtend = (activeConv?.turns.length ?? 0) > 0
   const extendActive = additiveMode || /^\/add\s+/.test(prompt)
+  const canEdit = canvasSrc?.kind === 'turn' && !generating && !editing
 
   return (
     <div className="app">
@@ -499,48 +589,111 @@ export function App() {
         </div>
         {error && <div className="error-banner">{error}</div>}
         <div className="input-bar">
-          <textarea
-            className="input"
-            placeholder={
-              extendActive && canExtend
-                ? 'Extend the page — your response will be appended.'
-                : 'Ask anything — the answer will be a webpage.'
-            }
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault()
-                void sendPrompt()
+          {editing ? (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                padding: '0 12px',
+                color: '#a78bfa',
+                fontSize: 13,
+                background: 'rgba(124,92,255,0.08)',
+                border: '1px dashed rgba(124,92,255,0.5)',
+                borderRadius: 8
+              }}
+            >
+              ✏️ Edit mode — click anywhere in the page to edit. Save creates a new turn.
+            </div>
+          ) : (
+            <textarea
+              className="input"
+              placeholder={
+                extendActive && canExtend
+                  ? 'Extend the page — your response will be appended.'
+                  : 'Ask anything — the answer will be a webpage.'
               }
-            }}
-            rows={2}
-          />
-          <button
-            className="icon-btn"
-            onClick={toggleAdditiveMode}
-            disabled={!canExtend || generating}
-            title={
-              !canExtend
-                ? 'Send a first prompt before you can extend the page'
-                : additiveMode
-                  ? 'Extend mode is ON — your next prompts append to the page (click to turn off)'
-                  : 'Extend mode is OFF — click to make follow-ups append to the page'
-            }
-            style={{
-              padding: '0 12px',
-              alignSelf: 'stretch',
-              opacity: !canExtend ? 0.4 : 1,
-              background: extendActive && canExtend ? 'var(--accent, #7c5cff)' : undefined,
-              color: extendActive && canExtend ? '#fff' : undefined,
-              borderColor: extendActive && canExtend ? 'transparent' : undefined,
-              fontSize: 12,
-              whiteSpace: 'nowrap'
-            }}
-          >
-            {extendActive && canExtend ? '＋ Extend' : '＋'}
-          </button>
-          {generating ? (
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault()
+                  void sendPrompt()
+                }
+              }}
+              rows={2}
+            />
+          )}
+          {!editing && (
+            <button
+              className="icon-btn"
+              onClick={toggleAdditiveMode}
+              disabled={!canExtend || generating}
+              title={
+                !canExtend
+                  ? 'Send a first prompt before you can extend the page'
+                  : additiveMode
+                    ? 'Extend mode is ON — your next prompts append to the page (click to turn off)'
+                    : 'Extend mode is OFF — click to make follow-ups append to the page'
+              }
+              style={{
+                padding: '0 12px',
+                alignSelf: 'stretch',
+                opacity: !canExtend ? 0.4 : 1,
+                background: extendActive && canExtend ? 'var(--accent, #7c5cff)' : undefined,
+                color: extendActive && canExtend ? '#fff' : undefined,
+                borderColor: extendActive && canExtend ? 'transparent' : undefined,
+                fontSize: 12,
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {extendActive && canExtend ? '＋ Extend' : '＋'}
+            </button>
+          )}
+          {!editing && (
+            <button
+              className="icon-btn"
+              onClick={enterEditMode}
+              disabled={!canEdit}
+              title={
+                !canEdit
+                  ? 'No page to edit yet'
+                  : 'Edit the current page directly (creates a new turn on save)'
+              }
+              style={{
+                padding: '0 12px',
+                alignSelf: 'stretch',
+                opacity: !canEdit ? 0.4 : 1,
+                fontSize: 12,
+                whiteSpace: 'nowrap'
+              }}
+            >
+              ✏️ Edit
+            </button>
+          )}
+          {editing ? (
+            <>
+              <button
+                className="icon-btn"
+                onClick={cancelEdits}
+                style={{
+                  padding: '0 14px',
+                  alignSelf: 'stretch',
+                  fontSize: 12,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="send"
+                onClick={() => void saveEdits()}
+                title="Save edits as a new turn"
+              >
+                Save
+              </button>
+            </>
+          ) : generating ? (
             <button className="send cancel" onClick={cancelGeneration}>Stop</button>
           ) : (
             <button className="send" onClick={() => void sendPrompt()} disabled={!prompt.trim()}>
