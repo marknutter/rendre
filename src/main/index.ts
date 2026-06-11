@@ -215,7 +215,11 @@ app.whenReady().then(async () => {
           // reuses the prior turn's bootstrap script via __rendreAttach).
           const orchResult = await provider.generate(orchReq, apiKey, {
             signal: ac.signal,
-            imageSearchEnabled,
+            // Image search is offered to FILLS only — the orchestrator
+            // emits empty <section data-slot> elements (rule: slots MUST
+            // be empty), so it has nowhere to put a <figure>. Fills know
+            // their target slot and can embed inline.
+            imageSearchEnabled: false,
             // No onChunk wiring to streamServer — the HTTP stream isn't
             // navigated to for additive turns.
             onTool: (event) => {
@@ -264,7 +268,8 @@ app.whenReady().then(async () => {
         // declaration appears in the orchestrator's output.
         const orchResult = await provider.generate(orchReq, apiKey, {
           signal: ac.signal,
-          imageSearchEnabled,
+          // See additive path above — image search is fills-only.
+          imageSearchEnabled: false,
           onChunk: (text) => {
             pushChunk(id, text)
             const declared = parseSlots(text)
