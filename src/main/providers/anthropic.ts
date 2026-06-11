@@ -68,7 +68,10 @@ export const anthropicProvider: LLMProvider = {
               cache_control: { type: 'ephemeral' }
             }
           ],
-          tools: buildToolList({ imageSearchEnabled: opts.imageSearchEnabled }),
+          tools: buildToolList({
+            imageSearchEnabled: opts.imageSearchEnabled,
+            imageGenEnabled: opts.imageGenEnabled
+          }),
           messages
         },
         { signal: opts.signal }
@@ -124,7 +127,11 @@ export const anthropicProvider: LLMProvider = {
         } catch {
           input = {}
         }
-        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        const result = await executeTool(t.name, input, budget, {
+          signal: opts.signal,
+          onTool: opts.onTool,
+          imageGenProvider: opts.imageGenProvider
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: t.id,
@@ -200,7 +207,10 @@ export const anthropicProvider: LLMProvider = {
               cache_control: { type: 'ephemeral' }
             }
           ],
-          tools: buildToolList({ imageSearchEnabled: opts.imageSearchEnabled }),
+          tools: buildToolList({
+            imageSearchEnabled: opts.imageSearchEnabled,
+            imageGenEnabled: opts.imageGenEnabled
+          }),
           messages
         },
         { signal: opts.signal }
@@ -265,7 +275,11 @@ export const anthropicProvider: LLMProvider = {
         } catch {
           input = {}
         }
-        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        const result = await executeTool(t.name, input, budget, {
+          signal: opts.signal,
+          onTool: opts.onTool,
+          imageGenProvider: opts.imageGenProvider
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: t.id,

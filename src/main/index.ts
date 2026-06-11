@@ -7,7 +7,16 @@ import {
   loadConfig,
   saveConfig
 } from './store'
-import { getKey, setKey, hasKey, getBraveKey, setBraveKey, hasBraveKey } from './keys'
+import {
+  getKey,
+  setKey,
+  hasKey,
+  getBraveKey,
+  setBraveKey,
+  hasBraveKey,
+  setReplicateKey,
+  hasReplicateKey
+} from './keys'
 import {
   startStreamServer,
   createSlot,
@@ -109,8 +118,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('keys:hasBrave', () => hasBraveKey())
   ipcMain.handle('keys:setBrave', (_e, k: string) => setBraveKey(k))
-  // Returning the raw key would be unsafe; getBraveKey is consumed by the tool
-  // executor in the main process, so the renderer never needs it directly.
+  ipcMain.handle('keys:hasReplicate', () => hasReplicateKey())
+  ipcMain.handle('keys:setReplicate', (_e, k: string) => setReplicateKey(k))
+  // Raw keys never leave the main process; tools consume them directly.
   void getBraveKey
 
   ipcMain.handle('llm:start', async (e, req: GenerateRequest) => {
@@ -127,6 +137,8 @@ app.whenReady().then(async () => {
     const turnCfg = await loadConfig()
     const dispatchEnabled = turnCfg.useSlotDispatch === true
     const imageSearchEnabled = turnCfg.imageSearchEnabled !== false
+    const imageGenEnabled = req.isImageGen === true
+    const imageGenProvider = turnCfg.imageGenProvider ?? 'dall-e-3'
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -170,6 +182,8 @@ app.whenReady().then(async () => {
               {
                 signal: ac.signal,
                 imageSearchEnabled,
+                imageGenEnabled,
+                imageGenProvider,
                 onChunk: (accumulated) => {
                   const delta = accumulated.slice(lastSent)
                   if (delta) {
@@ -363,6 +377,8 @@ app.whenReady().then(async () => {
     const turnCfg = await loadConfig()
     const dispatchEnabled = turnCfg.useSlotDispatch === true
     const imageSearchEnabled = turnCfg.imageSearchEnabled !== false
+    const imageGenEnabled = conv.imageGenMode === true
+    const imageGenProvider = turnCfg.imageGenProvider ?? 'dall-e-3'
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -408,6 +424,8 @@ app.whenReady().then(async () => {
           {
             signal: ac.signal,
             imageSearchEnabled,
+            imageGenEnabled,
+            imageGenProvider,
             onChunk: (accumulated) => {
               const delta = accumulated.slice(lastSent)
               if (delta) {

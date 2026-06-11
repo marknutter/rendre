@@ -11,6 +11,12 @@ export interface GenerateOptions {
    * (call sites in main/index.ts opt in based on ProviderConfig.imageSearchEnabled).
    */
   imageSearchEnabled?: boolean
+  /**
+   * When true, the model is offered the `generate_image` tool. Requires
+   * imageGenProvider to be set so the tool knows which backend to call.
+   */
+  imageGenEnabled?: boolean
+  imageGenProvider?: 'dall-e-3' | 'flux-schnell'
 }
 
 export interface ProviderResult {

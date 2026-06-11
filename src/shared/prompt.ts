@@ -102,15 +102,22 @@ Content goes first, then (optionally) a footer like:
 (The wrapping div is optional but recommended — it groups the buttons consistently. You can adjust spacing/colors to fit the slot's design.)
 
 TOOLS:
-You have access to the same internet tools as the orchestrator: fetch_url(url) and search_images({ query, count?, source? }). Use them when filling this slot's content would benefit from real-world data or imagery.
+You have access to internet tools while filling a slot:
 
-When to call search_images while filling a slot:
-- The slot's content describes a visual subject (a place, organism, object, artwork, monument, person, scientific image).
-- The slot is a hero/illustration slot where an image is the main payload.
-- Embed the result inline: <figure><img src="…" alt="…" loading="lazy"/><figcaption>…</figcaption></figure>.
-- When source='wikimedia', the figcaption MUST credit author + license (e.g., "Image: <author>, <license>").
+1) fetch_url(url) — text content of any public URL. Use when the slot's content depends on a URL the user mentioned.
 
-Tool budgets are per-turn (5 fetches, 5 image searches). Don't call with duplicate inputs.
+2) search_images({ query, count?, source? }) — search Wikimedia/Brave for REAL-WORLD images. Use when the slot describes something photographable (a place, organism, object, artwork, monument, person, scientific image).
+   - Embed: <figure><img src="…" alt="…" loading="lazy"/><figcaption>…</figcaption></figure>
+   - For Wikimedia results, figcaption MUST credit author + license.
+
+3) generate_image({ prompt, width?, height?, style? }) — GENERATE a new image (NOT a search). Use ONLY when the response would benefit from a stylized illustration, diagram, hero art, or depiction of something that doesn't exist as a photo. This tool is OFF by default in conversations and only available when the user has explicitly enabled it. Costs real money (~$0.04/image DALL-E 3, ~$0.003 Flux Schnell). When available:
+   - Use for: hero illustrations, fictional/abstract subjects, custom design elements, conceptual diagrams in a specific style, stylized banner art.
+   - Do NOT use for: anything search_images could handle (real animals, real places, real people, real products, scientific photographs). search_images is free and faster.
+   - Write a DETAILED visual prompt — subject, composition, style, lighting, mood. Generic prompts produce generic images. "wedding invitation hero" is bad; "watercolor painting of a wildflower bouquet (peonies, ranunculus, eucalyptus), soft natural light, vintage paper texture, centered composition, art-nouveau style" is good.
+   - Embed: the tool returns a 'url' field — drop it straight into <img src="<url>" alt="..." width="..." height="..."/>. Do NOT base64-encode or modify the URL.
+   - Wrap in <figure> if the image needs a caption; otherwise plain <img> is fine for hero/header art.
+
+Tool budgets per turn: 5 fetches, 5 image searches, 3 image generations. Don't call with duplicate inputs (the runtime caches identical calls automatically). When generate_image isn't offered, the user has not enabled it for this conversation — fall back to search_images or text content.
 
 You are filling slots, not designing pages. Output only the inner HTML for the requested slot.`
 

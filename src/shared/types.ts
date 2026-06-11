@@ -39,7 +39,22 @@ export interface Conversation {
    * The `/add` prefix overrides this per-prompt without flipping state.
    */
   additiveMode?: boolean
+  /**
+   * Sticky preference: when true, the model may call the `generate_image` tool
+   * during fills for this conversation. Per-prompt `/img` prefix overrides
+   * without flipping the sticky state. Image gen is OFF by default — it's
+   * expensive (~$0.04 DALL-E 3, ~$0.003 Flux Schnell) and slow (5-20s).
+   */
+  imageGenMode?: boolean
+  /** Running total of generate_image costs (USD) across this conversation. */
+  imageGenCostUsd?: number
 }
+
+export type ImageGenProvider = 'dall-e-3' | 'flux-schnell'
+export const IMAGE_GEN_PROVIDERS: readonly ImageGenProvider[] = [
+  'dall-e-3',
+  'flux-schnell'
+]
 
 export interface ProviderConfig {
   provider: ProviderId
@@ -53,6 +68,13 @@ export interface ProviderConfig {
    * Wikimedia works with no API key, so the feature is usable out of the box.
    */
   imageSearchEnabled: boolean
+  /**
+   * Which backend `generate_image` calls when offered to the model. DALL-E 3
+   * reuses the existing OpenAI key; Flux Schnell needs a Replicate token.
+   * Whether the tool is OFFERED is a per-conversation decision
+   * (Conversation.imageGenMode), not a top-level config — image gen is opt-in.
+   */
+  imageGenProvider: ImageGenProvider
 }
 
 export interface GenerateRequest {
@@ -66,6 +88,12 @@ export interface GenerateRequest {
    * history; falls back to a fresh turn on the first prompt of a conversation.
    */
   isAdditive?: boolean
+  /**
+   * When true, slot fills may call the `generate_image` tool. Resolved at the
+   * App layer from sticky `conversation.imageGenMode` OR a `/img` prefix on
+   * this specific prompt.
+   */
+  isImageGen?: boolean
 }
 
 /**
@@ -128,5 +156,6 @@ export const DEFAULT_CONFIG: ProviderConfig = {
   model: 'claude-sonnet-4-6',
   theme: 'system',
   useSlotDispatch: false,
-  imageSearchEnabled: true
+  imageSearchEnabled: true,
+  imageGenProvider: 'dall-e-3'
 }

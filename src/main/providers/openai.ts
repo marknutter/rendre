@@ -47,7 +47,10 @@ export const openaiProvider: LLMProvider = {
     messages.push({ role: 'user', content: req.prompt })
 
     const budget = createToolBudget()
-    const tools = buildOpenAIToolList({ imageSearchEnabled: opts.imageSearchEnabled })
+    const tools = buildOpenAIToolList({
+      imageSearchEnabled: opts.imageSearchEnabled,
+      imageGenEnabled: opts.imageGenEnabled
+    })
     let fullText = ''
     let inputTokens = 0
     let outputTokens = 0
@@ -128,7 +131,11 @@ export const openaiProvider: LLMProvider = {
         } catch {
           input = {}
         }
-        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        const result = await executeTool(t.name, input, budget, {
+          signal: opts.signal,
+          onTool: opts.onTool,
+          imageGenProvider: opts.imageGenProvider
+        })
         messages.push({
           role: 'tool',
           tool_call_id: t.id,
@@ -175,7 +182,10 @@ export const openaiProvider: LLMProvider = {
     })
 
     const budget = createToolBudget()
-    const tools = buildOpenAIToolList({ imageSearchEnabled: opts.imageSearchEnabled })
+    const tools = buildOpenAIToolList({
+      imageSearchEnabled: opts.imageSearchEnabled,
+      imageGenEnabled: opts.imageGenEnabled
+    })
     let fullText = ''
     let inputTokens = 0
     let outputTokens = 0
@@ -255,7 +265,11 @@ export const openaiProvider: LLMProvider = {
         } catch {
           input = {}
         }
-        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        const result = await executeTool(t.name, input, budget, {
+          signal: opts.signal,
+          onTool: opts.onTool,
+          imageGenProvider: opts.imageGenProvider
+        })
         messages.push({
           role: 'tool',
           tool_call_id: t.id,
