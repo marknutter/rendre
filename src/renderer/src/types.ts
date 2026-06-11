@@ -15,6 +15,8 @@ export interface RendreApi {
   setHistory: (c: Conversation[]) => Promise<void>
   hasKey: (p: ProviderId) => Promise<boolean>
   setKey: (p: ProviderId, k: string) => Promise<void>
+  hasBraveKey: () => Promise<boolean>
+  setBraveKey: (k: string) => Promise<void>
 
   startGenerate: (req: GenerateRequest) => Promise<string>
   cancelGenerate: (id: string) => Promise<void>

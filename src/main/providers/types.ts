@@ -6,6 +6,11 @@ export interface GenerateOptions {
   signal?: AbortSignal
   onChunk?: (accumulatedText: string) => void
   onTool?: (event: ToolUseEvent) => void
+  /**
+   * When true, the model is offered the `search_images` tool. Default false
+   * (call sites in main/index.ts opt in based on ProviderConfig.imageSearchEnabled).
+   */
+  imageSearchEnabled?: boolean
 }
 
 export interface ProviderResult {

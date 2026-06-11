@@ -47,6 +47,12 @@ export interface ProviderConfig {
   theme: Theme
   /** Allow the orchestrator to promote individual slots to a smarter model. */
   useSlotDispatch: boolean
+  /**
+   * When true, the model may call the `search_images` tool to inline web images
+   * (Wikimedia Commons, optionally Brave when a key is configured). Default on —
+   * Wikimedia works with no API key, so the feature is usable out of the box.
+   */
+  imageSearchEnabled: boolean
 }
 
 export interface GenerateRequest {
@@ -121,5 +127,6 @@ export const DEFAULT_CONFIG: ProviderConfig = {
   provider: 'anthropic',
   model: 'claude-sonnet-4-6',
   theme: 'system',
-  useSlotDispatch: false
+  useSlotDispatch: false,
+  imageSearchEnabled: true
 }
