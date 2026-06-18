@@ -9,6 +9,8 @@ import type {
 import type { GenerateRequest } from '../../shared/types'
 import {
   ADDITIVE_ORCHESTRATOR_PROMPT,
+  IMAGE_GEN_FILL_AUGMENT,
+  IMAGE_GEN_ORCHESTRATOR_AUGMENT,
   ORCHESTRATOR_PROMPT,
   SLOT_FILL_PROMPT
 } from '../../shared/prompt'
@@ -33,10 +35,13 @@ export const openaiProvider: LLMProvider = {
   ): Promise<ProviderResult> {
     const client = new OpenAI({ apiKey })
 
-    const systemPrompt =
+    const baseSystemPrompt =
       req.isAdditive && req.history.length > 0
         ? ADDITIVE_ORCHESTRATOR_PROMPT
         : ORCHESTRATOR_PROMPT
+    const systemPrompt = opts.imageGenForceMode
+      ? baseSystemPrompt + IMAGE_GEN_ORCHESTRATOR_AUGMENT
+      : baseSystemPrompt
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt }
     ]
@@ -47,7 +52,10 @@ export const openaiProvider: LLMProvider = {
     messages.push({ role: 'user', content: req.prompt })
 
     const budget = createToolBudget()
-    const tools = buildOpenAIToolList({ imageSearchEnabled: opts.imageSearchEnabled })
+    const tools = buildOpenAIToolList({
+      imageSearchEnabled: opts.imageSearchEnabled,
+      imageGenEnabled: opts.imageGenEnabled
+    })
     let fullText = ''
     let inputTokens = 0
     let outputTokens = 0
@@ -128,7 +136,11 @@ export const openaiProvider: LLMProvider = {
         } catch {
           input = {}
         }
-        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        const result = await executeTool(t.name, input, budget, {
+          signal: opts.signal,
+          onTool: opts.onTool,
+          imageGenProvider: opts.imageGenProvider
+        })
         messages.push({
           role: 'tool',
           tool_call_id: t.id,
@@ -157,8 +169,11 @@ export const openaiProvider: LLMProvider = {
   ): Promise<SlotFillResult> {
     const client = new OpenAI({ apiKey })
 
+    const fillSystemPrompt = opts.imageGenForceMode
+      ? SLOT_FILL_PROMPT + IMAGE_GEN_FILL_AUGMENT
+      : SLOT_FILL_PROMPT
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: SLOT_FILL_PROMPT }
+      { role: 'system', content: fillSystemPrompt }
     ]
     for (const turn of req.history) {
       messages.push({ role: 'user', content: turn.prompt })
@@ -175,7 +190,10 @@ export const openaiProvider: LLMProvider = {
     })
 
     const budget = createToolBudget()
-    const tools = buildOpenAIToolList({ imageSearchEnabled: opts.imageSearchEnabled })
+    const tools = buildOpenAIToolList({
+      imageSearchEnabled: opts.imageGenForceMode ? false : opts.imageSearchEnabled,
+      imageGenEnabled: opts.imageGenEnabled
+    })
     let fullText = ''
     let inputTokens = 0
     let outputTokens = 0
@@ -255,7 +273,11 @@ export const openaiProvider: LLMProvider = {
         } catch {
           input = {}
         }
-        const result = await executeTool(t.name, input, budget, opts.signal, opts.onTool)
+        const result = await executeTool(t.name, input, budget, {
+          signal: opts.signal,
+          onTool: opts.onTool,
+          imageGenProvider: opts.imageGenProvider
+        })
         messages.push({
           role: 'tool',
           tool_call_id: t.id,

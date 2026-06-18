@@ -223,6 +223,25 @@ export function App() {
         }
         return
       }
+      if (event.tool === 'generate_image') {
+        const prompt = (event.input as { prompt?: string } | undefined)?.prompt ?? ''
+        const cost = (event.input as { cost_usd?: number } | undefined)?.cost_usd
+        const label = prompt.slice(0, 60) + (prompt.length > 60 ? '…' : '')
+        if (event.type === 'start') {
+          setToolStatus(`🎨 Generating image: ${label}…`)
+        } else if (event.type === 'done') {
+          setToolStatus(
+            `Generated image ($${(cost ?? 0).toFixed(3)}). Composing webpage…`
+          )
+          if (typeof cost === 'number' && cost > 0) {
+            const convId = generationRef.current?.conv.id
+            if (convId) accumulateImageGenCost(convId, cost)
+          }
+        } else if (event.type === 'error') {
+          setToolStatus(`Image gen error: ${event.error ?? label}`)
+        }
+        return
+      }
       // fetch_url (and any other URL-shaped tool)
       const url = (event.input as { url?: string } | undefined)?.url
       const label = url ?? event.tool
@@ -311,12 +330,20 @@ export function App() {
     // additive turn requires at least one prior turn to extend.
     let userPrompt = prompt
     let oneShotAdditive = false
-    if (/^\/add\s+/.test(userPrompt)) {
-      oneShotAdditive = true
-      userPrompt = userPrompt.replace(/^\/add\s+/, '')
+    let oneShotImageGen = false
+    // Strip prefixes in any order: "/img /add foo" or "/add /img foo" both work.
+    for (let i = 0; i < 2; i++) {
+      if (/^\/add\s+/.test(userPrompt)) {
+        oneShotAdditive = true
+        userPrompt = userPrompt.replace(/^\/add\s+/, '')
+      } else if (/^\/img\s+/.test(userPrompt)) {
+        oneShotImageGen = true
+        userPrompt = userPrompt.replace(/^\/img\s+/, '')
+      }
     }
     const isAdditive =
       (conv.additiveMode === true || oneShotAdditive) && conv.turns.length > 0
+    const isImageGen = conv.imageGenMode === true || oneShotImageGen
 
     setPrompt('')
     setGenerating(true)
@@ -333,7 +360,8 @@ export function App() {
         history: conv.turns,
         provider: config.provider,
         model: config.model,
-        isAdditive
+        isAdditive,
+        isImageGen
       })
       generationRef.current = { id, conv, prompt: userPrompt, isAdditive, isIterate: false }
       setGenId(id)
@@ -364,6 +392,33 @@ export function App() {
       c.id === activeConv.id ? updatedConv : c
     )
     void persistConversations(updated)
+  }
+
+  function toggleImageGenMode() {
+    if (!activeConv) return
+    const next = activeConv.imageGenMode === true ? false : true
+    const updatedConv: Conversation = { ...activeConv, imageGenMode: next }
+    const updated = conversations.map((c) =>
+      c.id === activeConv.id ? updatedConv : c
+    )
+    void persistConversations(updated)
+  }
+
+  /**
+   * Bump the running image-gen cost on a conversation. Called from the
+   * onTool 'done' handler when a generate_image call completes. Persisted so
+   * the running total survives app restart.
+   */
+  function accumulateImageGenCost(convId: string, cost: number) {
+    setConversations((prev) => {
+      const next = prev.map((c) =>
+        c.id === convId
+          ? { ...c, imageGenCostUsd: (c.imageGenCostUsd ?? 0) + cost }
+          : c
+      )
+      void window.rendre.setHistory(next)
+      return next
+    })
   }
 
   function enterEditMode() {
@@ -539,6 +594,8 @@ export function App() {
   const canExtend = (activeConv?.turns.length ?? 0) > 0
   const extendActive = additiveMode || /^\/add\s+/.test(prompt)
   const canEdit = canvasSrc?.kind === 'turn' && !generating && !editing
+  const imageGenMode = activeConv?.imageGenMode === true
+  const imageGenActive = imageGenMode || /^\/img\s+/.test(prompt)
 
   return (
     <div className="app">
@@ -565,7 +622,20 @@ export function App() {
                 onClick={() => selectTurn(c.id, c.turns.at(-1)?.id ?? null)}
                 style={{ fontWeight: 500 }}
               >
-                {c.title || 'Untitled'}
+                <span>{c.title || 'Untitled'}</span>
+                {typeof c.imageGenCostUsd === 'number' && c.imageGenCostUsd > 0 && (
+                  <span
+                    title={`Image generation cost for this conversation: $${c.imageGenCostUsd.toFixed(3)}`}
+                    style={{
+                      marginLeft: 6,
+                      fontSize: 10,
+                      opacity: 0.7,
+                      fontWeight: 400
+                    }}
+                  >
+                    🎨 ${c.imageGenCostUsd.toFixed(3)}
+                  </span>
+                )}
               </button>
               {c.id === activeConvId && turnsForSidebar.map((t, i) => (
                 <button
@@ -661,6 +731,29 @@ export function App() {
               }}
             >
               {extendActive && canExtend ? '＋ Extend' : '＋'}
+            </button>
+          )}
+          {!editing && (
+            <button
+              className="icon-btn"
+              onClick={toggleImageGenMode}
+              disabled={generating}
+              title={
+                imageGenMode
+                  ? 'Image generation is ON — fills can call generate_image (click to turn off). Costs ~$0.04/image DALL-E or ~$0.003/image Flux.'
+                  : 'Image generation is OFF — click to let fills generate stylized illustrations. Costs money per image.'
+              }
+              style={{
+                padding: '0 12px',
+                alignSelf: 'stretch',
+                background: imageGenActive ? 'var(--accent, #7c5cff)' : undefined,
+                color: imageGenActive ? '#fff' : undefined,
+                borderColor: imageGenActive ? 'transparent' : undefined,
+                fontSize: 12,
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {imageGenActive ? '🎨 Gen' : '🎨'}
             </button>
           )}
           {!editing && (

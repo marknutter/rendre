@@ -1,5 +1,8 @@
 import { createServer, type ServerResponse } from 'http'
 import type { AddressInfo } from 'net'
+import { app } from 'electron'
+import { promises as fs } from 'fs'
+import { join } from 'path'
 
 interface SseEvent {
   type: string
@@ -40,6 +43,12 @@ export function startStreamServer(): Promise<number> {
       if (streamMatch) {
         return handleStream(streamMatch[1], res)
       }
+      // Generated images: /generated-images/<hash>.png — served from userData
+      // so persisted turns keep their images across app restarts.
+      const imgMatch = req.url?.match(/^\/generated-images\/([a-f0-9]+)\.png$/i)
+      if (imgMatch) {
+        return void handleGeneratedImage(imgMatch[1], res)
+      }
       res.statusCode = 404
       res.end('not found')
     })
@@ -50,6 +59,25 @@ export function startStreamServer(): Promise<number> {
       resolve(port)
     })
   })
+}
+
+async function handleGeneratedImage(hash: string, res: ServerResponse): Promise<void> {
+  // Strict 32-hex check — hash is the input-hash from generateImage's tool.
+  if (!/^[a-f0-9]{32}$/.test(hash)) {
+    res.statusCode = 404
+    res.end('not found')
+    return
+  }
+  const path = join(app.getPath('userData'), 'generated-images', `${hash}.png`)
+  try {
+    const buf = await fs.readFile(path)
+    res.setHeader('Content-Type', 'image/png')
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    res.end(buf)
+  } catch {
+    res.statusCode = 404
+    res.end('not found')
+  }
 }
 
 function handleStream(id: string, res: ServerResponse): void {

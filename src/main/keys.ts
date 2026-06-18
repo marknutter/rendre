@@ -3,6 +3,7 @@ import type { ProviderId } from '../shared/types'
 
 const SERVICE = 'rendre'
 const BRAVE_ACCOUNT = 'brave-api-key'
+const REPLICATE_ACCOUNT = 'replicate-api-key'
 
 function account(provider: ProviderId): string {
   return `${provider}-api-key`
@@ -30,4 +31,16 @@ export function setBraveKey(key: string): Promise<void> {
 
 export async function hasBraveKey(): Promise<boolean> {
   return Boolean(await keytar.getPassword(SERVICE, BRAVE_ACCOUNT))
+}
+
+export function getReplicateKey(): Promise<string | null> {
+  return keytar.getPassword(SERVICE, REPLICATE_ACCOUNT)
+}
+
+export function setReplicateKey(key: string): Promise<void> {
+  return keytar.setPassword(SERVICE, REPLICATE_ACCOUNT, key)
+}
+
+export async function hasReplicateKey(): Promise<boolean> {
+  return Boolean(await keytar.getPassword(SERVICE, REPLICATE_ACCOUNT))
 }

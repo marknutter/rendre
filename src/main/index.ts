@@ -7,7 +7,16 @@ import {
   loadConfig,
   saveConfig
 } from './store'
-import { getKey, setKey, hasKey, getBraveKey, setBraveKey, hasBraveKey } from './keys'
+import {
+  getKey,
+  setKey,
+  hasKey,
+  getBraveKey,
+  setBraveKey,
+  hasBraveKey,
+  setReplicateKey,
+  hasReplicateKey
+} from './keys'
 import {
   startStreamServer,
   createSlot,
@@ -109,8 +118,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('keys:hasBrave', () => hasBraveKey())
   ipcMain.handle('keys:setBrave', (_e, k: string) => setBraveKey(k))
-  // Returning the raw key would be unsafe; getBraveKey is consumed by the tool
-  // executor in the main process, so the renderer never needs it directly.
+  ipcMain.handle('keys:hasReplicate', () => hasReplicateKey())
+  ipcMain.handle('keys:setReplicate', (_e, k: string) => setReplicateKey(k))
+  // Raw keys never leave the main process; tools consume them directly.
   void getBraveKey
 
   ipcMain.handle('llm:start', async (e, req: GenerateRequest) => {
@@ -127,6 +137,8 @@ app.whenReady().then(async () => {
     const turnCfg = await loadConfig()
     const dispatchEnabled = turnCfg.useSlotDispatch === true
     const imageSearchEnabled = turnCfg.imageSearchEnabled !== false
+    const imageGenEnabled = req.isImageGen === true
+    const imageGenProvider = turnCfg.imageGenProvider ?? 'dall-e-3'
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -170,6 +182,9 @@ app.whenReady().then(async () => {
               {
                 signal: ac.signal,
                 imageSearchEnabled,
+                imageGenEnabled,
+                imageGenProvider,
+                imageGenForceMode: imageGenEnabled,
                 onChunk: (accumulated) => {
                   const delta = accumulated.slice(lastSent)
                   if (delta) {
@@ -220,6 +235,10 @@ app.whenReady().then(async () => {
             // be empty), so it has nowhere to put a <figure>. Fills know
             // their target slot and can embed inline.
             imageSearchEnabled: false,
+            // Forced-mode flag: the orchestrator doesn't get image tools, but
+            // it MUST know image gen is on so it declares image slots for
+            // every visual subject (instead of skipping them).
+            imageGenForceMode: imageGenEnabled,
             // No onChunk wiring to streamServer — the HTTP stream isn't
             // navigated to for additive turns.
             onTool: (event) => {
@@ -270,6 +289,7 @@ app.whenReady().then(async () => {
           signal: ac.signal,
           // See additive path above — image search is fills-only.
           imageSearchEnabled: false,
+          imageGenForceMode: imageGenEnabled,
           onChunk: (text) => {
             pushChunk(id, text)
             const declared = parseSlots(text)
@@ -363,6 +383,8 @@ app.whenReady().then(async () => {
     const turnCfg = await loadConfig()
     const dispatchEnabled = turnCfg.useSlotDispatch === true
     const imageSearchEnabled = turnCfg.imageSearchEnabled !== false
+    const imageGenEnabled = conv.imageGenMode === true
+    const imageGenProvider = turnCfg.imageGenProvider ?? 'dall-e-3'
     const provider = getProvider(req.provider)
     const sender = e.sender
 
@@ -408,6 +430,9 @@ app.whenReady().then(async () => {
           {
             signal: ac.signal,
             imageSearchEnabled,
+            imageGenEnabled,
+            imageGenProvider,
+            imageGenForceMode: imageGenEnabled,
             onChunk: (accumulated) => {
               const delta = accumulated.slice(lastSent)
               if (delta) {

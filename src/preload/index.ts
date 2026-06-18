@@ -21,6 +21,9 @@ const api = {
     ipcRenderer.invoke('keys:set', p, k),
   hasBraveKey: (): Promise<boolean> => ipcRenderer.invoke('keys:hasBrave'),
   setBraveKey: (k: string): Promise<void> => ipcRenderer.invoke('keys:setBrave', k),
+  hasReplicateKey: (): Promise<boolean> => ipcRenderer.invoke('keys:hasReplicate'),
+  setReplicateKey: (k: string): Promise<void> =>
+    ipcRenderer.invoke('keys:setReplicate', k),
 
   startGenerate: (req: GenerateRequest): Promise<string> =>
     ipcRenderer.invoke('llm:start', req),

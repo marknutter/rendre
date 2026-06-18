@@ -17,6 +17,8 @@ export interface RendreApi {
   setKey: (p: ProviderId, k: string) => Promise<void>
   hasBraveKey: () => Promise<boolean>
   setBraveKey: (k: string) => Promise<void>
+  hasReplicateKey: () => Promise<boolean>
+  setReplicateKey: (k: string) => Promise<void>
 
   startGenerate: (req: GenerateRequest) => Promise<string>
   cancelGenerate: (id: string) => Promise<void>

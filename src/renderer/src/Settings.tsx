@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
-import type { ProviderConfig, ProviderId } from '../../shared/types'
-import { ANTHROPIC_MODELS, OPENAI_MODELS } from '../../shared/types'
+import type {
+  ImageGenProvider,
+  ProviderConfig,
+  ProviderId
+} from '../../shared/types'
+import {
+  ANTHROPIC_MODELS,
+  IMAGE_GEN_PROVIDERS,
+  OPENAI_MODELS
+} from '../../shared/types'
 
 interface Props {
   config: ProviderConfig
@@ -20,6 +28,11 @@ export function Settings({ config, onClose, onSaved }: Props) {
   )
   const [braveKey, setBraveKey] = useState('')
   const [hasBraveKey, setHasBraveKey] = useState(false)
+  const [imageGenProvider, setImageGenProvider] = useState<ImageGenProvider>(
+    config.imageGenProvider ?? 'dall-e-3'
+  )
+  const [replicateKey, setReplicateKey] = useState('')
+  const [hasReplicateKey, setHasReplicateKey] = useState(false)
 
   const models = provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS
 
@@ -29,6 +42,7 @@ export function Settings({ config, onClose, onSaved }: Props) {
 
   useEffect(() => {
     void window.rendre.hasBraveKey().then(setHasBraveKey)
+    void window.rendre.hasReplicateKey().then(setHasReplicateKey)
   }, [])
 
   useEffect(() => {
@@ -46,12 +60,16 @@ export function Settings({ config, onClose, onSaved }: Props) {
       if (braveKey.trim()) {
         await window.rendre.setBraveKey(braveKey.trim())
       }
+      if (replicateKey.trim()) {
+        await window.rendre.setReplicateKey(replicateKey.trim())
+      }
       const next: ProviderConfig = {
         ...config,
         provider,
         model,
         useSlotDispatch,
-        imageSearchEnabled
+        imageSearchEnabled,
+        imageGenProvider
       }
       await window.rendre.setConfig(next)
       onSaved(next)
@@ -157,6 +175,48 @@ export function Settings({ config, onClose, onSaved }: Props) {
             Brave key, image search still works via Wikimedia only.
           </p>
         </div>
+
+        <div className="field">
+          <label>Image generation provider</label>
+          <select
+            value={imageGenProvider}
+            onChange={(e) => setImageGenProvider(e.target.value as ImageGenProvider)}
+          >
+            {IMAGE_GEN_PROVIDERS.map((p) => (
+              <option key={p} value={p}>
+                {p === 'dall-e-3'
+                  ? 'DALL-E 3 (OpenAI, ~$0.04/image)'
+                  : 'Flux Schnell (Replicate, ~$0.003/image)'}
+              </option>
+            ))}
+          </select>
+          <p style={{ color: '#888', fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+            Used when image generation is enabled for a conversation (the 🎨 toggle in the
+            input bar). DALL-E 3 reuses your OpenAI key; Flux Schnell needs a Replicate
+            token below — but it's 13x cheaper and faster.
+          </p>
+        </div>
+
+        {imageGenProvider === 'flux-schnell' && (
+          <div className="field">
+            <label>
+              Replicate API token{' '}
+              {hasReplicateKey && (
+                <span style={{ color: '#6fd16f' }}>(set — leave blank to keep)</span>
+              )}
+            </label>
+            <input
+              type="password"
+              value={replicateKey}
+              onChange={(e) => setReplicateKey(e.target.value)}
+              placeholder="r8_…"
+            />
+            <p style={{ color: '#888', fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>
+              Get a token at <span style={{ fontFamily: 'monospace' }}>replicate.com/account/api-tokens</span>.
+              Flux Schnell renders at ~5-10s for ~$0.003/image.
+            </p>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="icon-btn" onClick={onClose}>Cancel</button>

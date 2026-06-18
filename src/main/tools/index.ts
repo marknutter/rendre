@@ -20,25 +20,48 @@ import {
   formatSearchImagesResult,
   type SearchImagesInput
 } from './searchImages'
+import {
+  GENERATE_IMAGE_TOOL,
+  generateImage,
+  formatGenerateImageResult,
+  type GenerateImageInput,
+  type ImageGenProvider
+} from './generateImage'
 
 export const MAX_FETCH_URL_CALLS = 5
 export const MAX_IMAGE_SEARCH_CALLS = 5
+export const MAX_IMAGE_GEN_CALLS = 3
 
 export interface ToolBudget {
   fetchUrl: number
   searchImages: number
+  imageGen: number
+  imageGenCostUsd: number
   cache: Map<string, string>
 }
 
 export function createToolBudget(): ToolBudget {
-  return { fetchUrl: 0, searchImages: 0, cache: new Map() }
+  return {
+    fetchUrl: 0,
+    searchImages: 0,
+    imageGen: 0,
+    imageGenCostUsd: 0,
+    cache: new Map()
+  }
 }
+
+type AnyTool =
+  | typeof FETCH_URL_TOOL
+  | typeof SEARCH_IMAGES_TOOL
+  | typeof GENERATE_IMAGE_TOOL
 
 export function buildToolList(opts: {
   imageSearchEnabled?: boolean
-}): Array<typeof FETCH_URL_TOOL | typeof SEARCH_IMAGES_TOOL> {
-  const tools: Array<typeof FETCH_URL_TOOL | typeof SEARCH_IMAGES_TOOL> = [FETCH_URL_TOOL]
+  imageGenEnabled?: boolean
+}): AnyTool[] {
+  const tools: AnyTool[] = [FETCH_URL_TOOL]
   if (opts.imageSearchEnabled) tools.push(SEARCH_IMAGES_TOOL)
+  if (opts.imageGenEnabled) tools.push(GENERATE_IMAGE_TOOL)
   return tools
 }
 
@@ -49,6 +72,7 @@ export function buildToolList(opts: {
  */
 export function buildOpenAIToolList(opts: {
   imageSearchEnabled?: boolean
+  imageGenEnabled?: boolean
 }): Array<{
   type: 'function'
   function: {
@@ -73,6 +97,13 @@ export interface ExecuteToolResult {
   isError: boolean
 }
 
+export interface ExecuteToolOpts {
+  signal?: AbortSignal
+  onTool?: (event: ToolUseEvent) => void
+  /** Which provider to use for generate_image (required if the tool is offered). */
+  imageGenProvider?: ImageGenProvider
+}
+
 /**
  * Run a tool by name. Hidden inside: budget enforcement, in-turn caching,
  * onTool event emission. Always resolves (no throws) — errors come back as
@@ -83,9 +114,9 @@ export async function executeTool(
   name: string,
   input: unknown,
   budget: ToolBudget,
-  signal?: AbortSignal,
-  onTool?: (event: ToolUseEvent) => void
+  opts: ExecuteToolOpts
 ): Promise<ExecuteToolResult> {
+  const { signal, onTool } = opts
   const cacheKey = name + ':' + JSON.stringify(input ?? {})
   const cached = budget.cache.get(cacheKey)
   if (cached !== undefined) {
@@ -127,6 +158,41 @@ export async function executeTool(
       const formatted = formatSearchImagesResult(result)
       budget.cache.set(cacheKey, formatted)
       onTool?.({ type: 'done', tool: name, input })
+      return { content: formatted, isError: false }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      onTool?.({ type: 'error', tool: name, input, error: errMsg })
+      return { content: `Error: ${errMsg}`, isError: true }
+    }
+  }
+
+  if (name === 'generate_image') {
+    if (budget.imageGen >= MAX_IMAGE_GEN_CALLS) {
+      const msg = `Error: generate_image budget exceeded (max ${MAX_IMAGE_GEN_CALLS} per turn). Compose with what you have.`
+      onTool?.({ type: 'error', tool: name, input, error: 'budget exceeded' })
+      return { content: msg, isError: true }
+    }
+    if (!opts.imageGenProvider) {
+      const msg =
+        'Error: image generation provider not configured. Open Settings → choose DALL-E 3 or Flux Schnell.'
+      onTool?.({ type: 'error', tool: name, input, error: 'no provider' })
+      return { content: msg, isError: true }
+    }
+    budget.imageGen++
+    onTool?.({ type: 'start', tool: name, input })
+    try {
+      const result = await generateImage(input as GenerateImageInput, {
+        provider: opts.imageGenProvider,
+        signal
+      })
+      budget.imageGenCostUsd += result.cost_usd
+      const formatted = formatGenerateImageResult(result)
+      budget.cache.set(cacheKey, formatted)
+      onTool?.({
+        type: 'done',
+        tool: name,
+        input: { ...(input as Record<string, unknown>), cost_usd: result.cost_usd }
+      })
       return { content: formatted, isError: false }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
