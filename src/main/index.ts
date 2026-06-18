@@ -184,6 +184,7 @@ app.whenReady().then(async () => {
                 imageSearchEnabled,
                 imageGenEnabled,
                 imageGenProvider,
+                imageGenForceMode: imageGenEnabled,
                 onChunk: (accumulated) => {
                   const delta = accumulated.slice(lastSent)
                   if (delta) {
@@ -234,6 +235,10 @@ app.whenReady().then(async () => {
             // be empty), so it has nowhere to put a <figure>. Fills know
             // their target slot and can embed inline.
             imageSearchEnabled: false,
+            // Forced-mode flag: the orchestrator doesn't get image tools, but
+            // it MUST know image gen is on so it declares image slots for
+            // every visual subject (instead of skipping them).
+            imageGenForceMode: imageGenEnabled,
             // No onChunk wiring to streamServer — the HTTP stream isn't
             // navigated to for additive turns.
             onTool: (event) => {
@@ -284,6 +289,7 @@ app.whenReady().then(async () => {
           signal: ac.signal,
           // See additive path above — image search is fills-only.
           imageSearchEnabled: false,
+          imageGenForceMode: imageGenEnabled,
           onChunk: (text) => {
             pushChunk(id, text)
             const declared = parseSlots(text)
@@ -426,6 +432,7 @@ app.whenReady().then(async () => {
             imageSearchEnabled,
             imageGenEnabled,
             imageGenProvider,
+            imageGenForceMode: imageGenEnabled,
             onChunk: (accumulated) => {
               const delta = accumulated.slice(lastSent)
               if (delta) {

@@ -9,6 +9,8 @@ import type {
 import type { GenerateRequest } from '../../shared/types'
 import {
   ADDITIVE_ORCHESTRATOR_PROMPT,
+  IMAGE_GEN_FILL_AUGMENT,
+  IMAGE_GEN_ORCHESTRATOR_AUGMENT,
   ORCHESTRATOR_PROMPT,
   SLOT_FILL_PROMPT
 } from '../../shared/prompt'
@@ -33,10 +35,13 @@ export const openaiProvider: LLMProvider = {
   ): Promise<ProviderResult> {
     const client = new OpenAI({ apiKey })
 
-    const systemPrompt =
+    const baseSystemPrompt =
       req.isAdditive && req.history.length > 0
         ? ADDITIVE_ORCHESTRATOR_PROMPT
         : ORCHESTRATOR_PROMPT
+    const systemPrompt = opts.imageGenForceMode
+      ? baseSystemPrompt + IMAGE_GEN_ORCHESTRATOR_AUGMENT
+      : baseSystemPrompt
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt }
     ]
@@ -164,8 +169,11 @@ export const openaiProvider: LLMProvider = {
   ): Promise<SlotFillResult> {
     const client = new OpenAI({ apiKey })
 
+    const fillSystemPrompt = opts.imageGenForceMode
+      ? SLOT_FILL_PROMPT + IMAGE_GEN_FILL_AUGMENT
+      : SLOT_FILL_PROMPT
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: SLOT_FILL_PROMPT }
+      { role: 'system', content: fillSystemPrompt }
     ]
     for (const turn of req.history) {
       messages.push({ role: 'user', content: turn.prompt })
@@ -183,7 +191,7 @@ export const openaiProvider: LLMProvider = {
 
     const budget = createToolBudget()
     const tools = buildOpenAIToolList({
-      imageSearchEnabled: opts.imageSearchEnabled,
+      imageSearchEnabled: opts.imageGenForceMode ? false : opts.imageSearchEnabled,
       imageGenEnabled: opts.imageGenEnabled
     })
     let fullText = ''

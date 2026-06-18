@@ -9,6 +9,8 @@ import type {
 import type { GenerateRequest } from '../../shared/types'
 import {
   ADDITIVE_ORCHESTRATOR_PROMPT,
+  IMAGE_GEN_FILL_AUGMENT,
+  IMAGE_GEN_ORCHESTRATOR_AUGMENT,
   ORCHESTRATOR_PROMPT,
   SLOT_FILL_PROMPT
 } from '../../shared/prompt'
@@ -51,10 +53,13 @@ export const anthropicProvider: LLMProvider = {
     let totalCacheCreation = 0
     const budget = createToolBudget()
 
-    const systemPrompt =
+    const baseSystemPrompt =
       req.isAdditive && req.history.length > 0
         ? ADDITIVE_ORCHESTRATOR_PROMPT
         : ORCHESTRATOR_PROMPT
+    const systemPrompt = opts.imageGenForceMode
+      ? baseSystemPrompt + IMAGE_GEN_ORCHESTRATOR_AUGMENT
+      : baseSystemPrompt
 
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
       const stream = client.messages.stream(
@@ -195,6 +200,10 @@ export const anthropicProvider: LLMProvider = {
     let cacheReadTokens = 0
     let cacheCreationTokens = 0
 
+    const fillSystemPrompt = opts.imageGenForceMode
+      ? SLOT_FILL_PROMPT + IMAGE_GEN_FILL_AUGMENT
+      : SLOT_FILL_PROMPT
+
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
       const stream = client.messages.stream(
         {
@@ -203,12 +212,14 @@ export const anthropicProvider: LLMProvider = {
           system: [
             {
               type: 'text',
-              text: SLOT_FILL_PROMPT,
+              text: fillSystemPrompt,
               cache_control: { type: 'ephemeral' }
             }
           ],
+          // In forced image-gen mode, REMOVE search_images from the tool list.
+          // The only image tool is generate_image — model has no escape hatch.
           tools: buildToolList({
-            imageSearchEnabled: opts.imageSearchEnabled,
+            imageSearchEnabled: opts.imageGenForceMode ? false : opts.imageSearchEnabled,
             imageGenEnabled: opts.imageGenEnabled
           }),
           messages
